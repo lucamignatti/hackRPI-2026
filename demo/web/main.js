@@ -2,6 +2,7 @@
 // World frame is z-up, metres (same as the simulator), so we set three.js up = +z.
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 THREE.Object3D.DEFAULT_UP.set(0, 0, 1);
 
@@ -328,43 +329,172 @@ function labelSprite(text, color, w = 64, height = 0.8) {
 const dyn = new THREE.Group();
 scene.add(dyn);
 
+// Shared drone resources keep the refined model cheaper than the old collection of one-off meshes.
+// Geometry transforms are baked once; every drone then reuses the same GPU buffers.
+function placedGeometry(geometry, position = [0, 0, 0], rotation = [0, 0, 0], scale = [1, 1, 1]) {
+  const transform = new THREE.Matrix4().compose(
+    new THREE.Vector3(...position),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(...rotation)),
+    new THREE.Vector3(...scale),
+  );
+  geometry.applyMatrix4(transform);
+  return geometry;
+}
+
+function dronePart(geometry, id, position, rotation, scale) {
+  placedGeometry(geometry, position, rotation, scale);
+  const part = new Float32Array(geometry.attributes.position.count);
+  part.fill(id);
+  geometry.setAttribute("dronePart", new THREE.BufferAttribute(part, 1));
+  return geometry;
+}
+
+const droneBodyGeometry = mergeGeometries([
+  dronePart(new THREE.CapsuleGeometry(0.15, 0.28, 4, 12), 0, [0, 0, 0.015], [0, 0, -Math.PI / 2]),
+  dronePart(new THREE.BoxGeometry(0.30, 0.24, 0.08), 0, [0, 0, -0.065]),
+  dronePart(new THREE.SphereGeometry(0.19, 12, 8), 1, [0.045, 0, 0.12], [0, 0, 0], [1.15, 0.72, 0.42]),
+  dronePart(new THREE.ConeGeometry(0.062, 0.14, 10), 2, [0.34, 0, 0.015], [0, 0, -Math.PI / 2]),
+  dronePart(new THREE.BoxGeometry(0.10, 0.025, 0.11), 2, [-0.29, 0, 0.08], [0, -0.18, 0]),
+], false);
+droneBodyGeometry.computeBoundingSphere();
+
+const droneFrameParts = [];
+for (const angle of [Math.PI / 4, -Math.PI / 4]) {
+  droneFrameParts.push(placedGeometry(new THREE.BoxGeometry(0.78, 0.045, 0.035), [0, 0, -0.005], [0, 0, angle]));
+}
+for (const [x, y] of [[0.28, 0.28], [-0.28, 0.28], [0.28, -0.28], [-0.28, -0.28]]) {
+  droneFrameParts.push(placedGeometry(new THREE.CylinderGeometry(0.074, 0.074, 0.08, 10), [x, y, 0.045], [Math.PI / 2, 0, 0]));
+}
+for (const y of [-0.18, 0.18]) {
+  droneFrameParts.push(placedGeometry(new THREE.CylinderGeometry(0.015, 0.015, 0.40, 6), [0, y, -0.17], [0, 0, Math.PI / 2]));
+  for (const x of [-0.13, 0.13]) {
+    droneFrameParts.push(placedGeometry(new THREE.CylinderGeometry(0.012, 0.012, 0.15, 6), [x, y * 0.86, -0.105], [0.2 * Math.sign(y), 0, 0]));
+  }
+}
+droneFrameParts.push(placedGeometry(new THREE.CylinderGeometry(0.02, 0.02, 0.15, 8), [0, 0, -0.14], [Math.PI / 2, 0, 0]));
+const droneFrameGeometry = mergeGeometries(droneFrameParts, false);
+droneFrameGeometry.computeBoundingSphere();
+
+const droneRotorGeometry = mergeGeometries(
+  [[0.28, 0.28], [-0.28, 0.28], [0.28, -0.28], [-0.28, -0.28]].map(([x, y]) =>
+    placedGeometry(new THREE.CircleGeometry(0.17, 20), [x, y, 0.095])),
+  false,
+);
+droneRotorGeometry.computeBoundingSphere();
+
+const droneClawGeometry = placedGeometry(
+  new THREE.CapsuleGeometry(0.018, 0.075, 2, 6), [0, 0, 0], [Math.PI / 2, 0, 0],
+);
+const droneFrameMaterial = new THREE.MeshStandardMaterial({ color: 0x202a36, roughness: 0.48, metalness: 0.68 });
+const sceneShaderTime = { value: 0 };
+const droneRotorMaterial = new THREE.ShaderMaterial({
+  uniforms: { droneTime: sceneShaderTime },
+  transparent: true,
+  depthWrite: false,
+  side: THREE.DoubleSide,
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform float droneTime;
+    varying vec2 vUv;
+    void main() {
+      vec2 p = vUv * 2.0 - 1.0;
+      float radius = length(p);
+      if (radius > 1.0) discard;
+      float angle = atan(p.y, p.x) + droneTime * 18.0;
+      float blades = smoothstep(0.72, 0.98, abs(cos(angle * 2.0)));
+      float rim = 1.0 - smoothstep(0.74, 1.0, radius);
+      float hub = 1.0 - smoothstep(0.10, 0.24, radius);
+      float alpha = (0.08 + 0.34 * blades) * rim + 0.72 * hub;
+      vec3 color = mix(vec3(0.34, 0.48, 0.62), vec3(0.78, 0.92, 1.0), min(blades + hub, 1.0));
+      gl_FragColor = vec4(color, alpha);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+    }
+  `,
+});
+// A rotor disc is planar, so one double-sided transparent pass is sufficient.
+droneRotorMaterial.forceSinglePass = true;
+
+function makeDroneBodyMaterial(color) {
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.28,
+    metalness: 0.62,
+    emissive: 0x000000,
+    emissiveIntensity: 1.2,
+  });
+  const accent = new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.58);
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.droneTime = sceneShaderTime;
+    shader.uniforms.droneAccent = { value: accent };
+    shader.vertexShader = /* glsl */ `
+      attribute float dronePart;
+      varying float vDronePart;
+      varying vec3 vDronePosition;
+      varying vec3 vDroneViewNormal;
+      varying vec3 vDroneViewDirection;
+    ` + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <begin_vertex>",
+      /* glsl */ `
+        #include <begin_vertex>
+        vDronePart = dronePart;
+        vDronePosition = position;
+        vDroneViewNormal = normalize(normalMatrix * normal);
+        vDroneViewDirection = -(modelViewMatrix * vec4(position, 1.0)).xyz;
+      `,
+    );
+    shader.fragmentShader = /* glsl */ `
+      uniform float droneTime;
+      uniform vec3 droneAccent;
+      varying float vDronePart;
+      varying vec3 vDronePosition;
+      varying vec3 vDroneViewNormal;
+      varying vec3 vDroneViewDirection;
+    ` + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      /* glsl */ `
+        #include <color_fragment>
+        float canopy = step(0.5, vDronePart) * (1.0 - step(1.5, vDronePart));
+        float accentPart = step(1.5, vDronePart);
+        float scan = 0.5 + 0.5 * sin(vDronePosition.x * 34.0 - droneTime * 2.4);
+        float rim = pow(1.0 - max(dot(normalize(vDroneViewDirection), normalize(vDroneViewNormal)), 0.0), 3.0);
+        vec3 canopyColor = mix(vec3(0.008, 0.025, 0.055), droneAccent * 0.24, 0.35 + 0.25 * scan);
+        diffuseColor.rgb = mix(diffuseColor.rgb, canopyColor, canopy);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.82, 0.93, 1.0), accentPart);
+        diffuseColor.rgb += droneAccent * (0.025 * scan + 0.14 * rim) * (1.0 - canopy);
+      `,
+    );
+  };
+  material.customProgramCacheKey = () => "skyhand-drone-shell-r186-v1";
+  return material;
+}
+
 function makeDrone(color) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.3, emissive: 0x000000 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.34, 0.12), mat);
-  g.add(body);
-  const armMat = new THREE.MeshStandardMaterial({ color: 0x2b313a });
-  for (const a of [Math.PI / 4, -Math.PI / 4]) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.04, 0.03), armMat);
-    arm.rotation.z = a;
-    g.add(arm);
-  }
-  const rotorMat = new THREE.MeshStandardMaterial({ color: 0xdfe8f2, transparent: true, opacity: 0.55 });
-  for (const [x, y] of [[0.28, 0.28], [-0.28, 0.28], [0.28, -0.28], [-0.28, -0.28]]) {
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.015, 20), rotorMat);
-    r.rotation.x = Math.PI / 2;
-    r.position.set(x, y, 0.07);
-    g.add(r);
-  }
+  const mat = makeDroneBodyMaterial(color);
+  g.add(new THREE.Mesh(droneBodyGeometry, mat));
+  g.add(new THREE.Mesh(droneFrameGeometry, droneFrameMaterial));
+  g.add(new THREE.Mesh(droneRotorGeometry, droneRotorMaterial));
   const gripMat = new THREE.MeshStandardMaterial({ color: 0x9aa3ad, emissive: 0x000000 });
-  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.14, 8), gripMat);
-  stem.rotation.x = Math.PI / 2;
-  stem.position.z = -0.1;
-  g.add(stem);
   const claws = [];
   for (const s of [-1, 1]) {
-    const c = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.05, 0.08), gripMat);
-    c.position.set(0.05 * s, 0, -0.19);
+    const c = new THREE.Mesh(droneClawGeometry, gripMat);
+    c.position.set(0.06 * s, 0, -0.22);
     g.add(c);
     claws.push([c, s]);
   }
-  const front = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  front.rotation.z = -Math.PI / 2;
-  front.position.set(0.22, 0, 0.0);
-  g.add(front);
   // beacon so the 0.7 m drone is findable in a 50 m arena
   const beacon = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.58, 32), new THREE.MeshBasicMaterial({
     color, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthTest: false }));
+  beacon.material.forceSinglePass = true;
   beacon.renderOrder = 9;
   g.add(beacon);
   g.userData = { mat, gripMat, claws, beacon, target: new THREE.Vector3(), qtarget: new THREE.Quaternion(), fresh: true };
@@ -1305,21 +1435,25 @@ function connect() {
 }
 
 // ------------------------------------------------------------------ render loop
-const clock = new THREE.Clock();
+const timer = new THREE.Timer();
+timer.connect(document);
+const followBefore = new THREE.Vector3();
+const followDelta = new THREE.Vector3();
 function animate() {
-  requestAnimationFrame(animate);
-  const dt = Math.min(clock.getDelta(), 0.1);
+  timer.update();
+  const dt = Math.min(timer.getDelta(), 0.1);
+  sceneShaderTime.value = timer.getElapsed();
   const a = 1 - Math.exp(-dt * 18);
   const fd = drones[followIdx];
-  const before = fd ? fd.position.clone() : null;
+  if (fd) followBefore.copy(fd.position);
   for (const d of drones) {
     d.position.lerp(d.userData.target, a);
     d.quaternion.slerp(d.userData.qtarget, a);
   }
-  if (follow && before) {
-    const delta = fd.position.clone().sub(before);
-    camera.position.add(delta);
-    controls.target.add(delta);
+  if (follow && fd) {
+    followDelta.subVectors(fd.position, followBefore);
+    camera.position.add(followDelta);
+    controls.target.add(followDelta);
   }
   // drones stay findable in a 600 m arena: scale the beacon ring with camera distance
   for (const d of drones) {
@@ -1344,9 +1478,9 @@ function animate() {
   controls.update();
   renderer.render(scene, camera);
 }
-window.__skyhand = { camera, controls, scene, pools, drones, followDrone, setFollow,
+window.__skyhand = { camera, controls, renderer, scene, pools, drones, followDrone, setFollow,
   get sea() { return sea; }, get follow() { return { on: follow, idx: followIdx }; } };   // console debugging
 resize();
 renderExamples("trash");
 connect();
-animate();
+renderer.setAnimationLoop(animate);

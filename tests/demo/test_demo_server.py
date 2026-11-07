@@ -605,8 +605,8 @@ def test_index_pins_cdn_only():
     html = (WEB / "index.html").read_text()
     urls = re.findall(r"https?://[^\s\"'<>]+", html)
     assert urls, "expected the three.js importmap"
-    allowed = ("https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-               "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/")
+    allowed = ("https://cdn.jsdelivr.net/npm/three@0.186.1/build/three.module.js",
+               "https://cdn.jsdelivr.net/npm/three@0.186.1/examples/jsm/")
     for u in urls:
         assert u in allowed, u
     js = (WEB / "main.js").read_text()
@@ -642,7 +642,19 @@ def test_mainjs_world_viewer():
     sea = js[js.index("function makeSea"):js.index("function updateSea")]
     assert "uK[i] * dot(dv, position.xy) - uOmega[i] * uT + uPhase[i]" in sea and "uAmp[i] * cos(ph)" in sea
     assert "skyH + uLevel" in sea
-    assert "three@0.160.0" in html
+    assert "three@0.186.1" in html
+
+
+def test_mainjs_r186_drone_model_and_shader():
+    """The r186 viewer keeps drone detail shared, shader-local, and allocation-light."""
+    js = (WEB / "main.js").read_text()
+    for key in ("mergeGeometries", "droneBodyGeometry", "droneFrameGeometry", "droneRotorGeometry",
+                "dronePart", "onBeforeCompile", "droneRotorMaterial", "forceSinglePass",
+                "THREE.Timer", "renderer.setAnimationLoop"):
+        assert key in js, key
+    assert "THREE.Clock" not in js
+    assert "requestAnimationFrame(animate)" not in js
+    assert "fd.position.clone()" not in js
 
 
 def test_mainjs_wave_formula_matches_waves_params():
