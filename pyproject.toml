@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skyhand"
+version = "0.1.0"
+description = "Zero-shot drone behavioral foundation model (HackRPI 2026)"
+requires-python = ">=3.9"
+# Core deps only: training needs nothing beyond these.
+dependencies = ["torch>=2.0", "numpy"]
+
+[project.optional-dependencies]
+sim = ["genesis-world"]                      # desktop / laptops only
+mission = ["google-genai", "pydantic>=2"]
+demo = ["fastapi", "uvicorn[standard]", "pydantic>=2"]
+test = ["pytest", "httpx"]
+
+[tool.setuptools.packages.find]
+include = ["skyhand*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "genesis: needs the Genesis simulator (skipped when genesis-world is not installed)",
+  "slow: long-running test",
+]

@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SkyHand Demo</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <div id="viewport">
+      <canvas id="scene"></canvas>
+      <div id="hud">
+        <div class="hud-row">
+          <span id="conn" class="pill bad">offline</span>
+          <span id="policy-mode" class="pill">policy: ?</span>
+          <span id="mission-mode" class="pill">compiler: ?</span>
+          <span id="status" class="pill status">idle</span>
+        </div>
+        <div id="message" class="hud-msg">Connecting to the simulator...</div>
+        <div class="gauges">
+          <div class="gauge"><label>reward</label><span id="g-reward">-</span></div>
+          <div class="gauge"><label>swing</label><span id="g-swing">-</span></div>
+          <div class="gauge"><label>shield hits</label><span id="g-shield">0</span></div>
+          <div class="gauge"><label>time</label><span id="g-time">0.0 s</span></div>
+          <div class="gauge"><label>wind</label><span id="g-wind">-</span></div>
+        </div>
+      </div>
+      <div id="mode-banner" class="hidden"></div>
+      <div id="legend">
+        <span><i style="background:#9aa3ad"></i>NIR LiDAR</span>
+        <span><i style="background:#39ff6a"></i>green LiDAR</span>
+        <span><i style="background:#ff8a3d"></i>moving obstacle</span>
+        <span><i style="background:#ff4d6d"></i>no-fly zone</span>
+      </div>
+    </div>
+
+    <aside id="panel">
+      <header>
+        <h1>SkyHand</h1>
+        <p class="sub">One drone brain, any mission</p>
+      </header>
+
+      <section>
+        <h2>1. Scene</h2>
+        <div class="seg" id="scene-toggle">
+          <button data-scene="trash" class="active">Trash arena</button>
+          <button data-scene="ocean">Ocean</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>2. Mission</h2>
+        <textarea id="mission-text" rows="3" placeholder="e.g. grab the bag and drop it in the bin without getting near the moving carts"></textarea>
+        <div class="examples" id="examples"></div>
+        <button id="btn-compile" class="primary">Compile</button>
+      </section>
+
+      <section id="card" class="hidden">
+        <h2>3. Compiled reward <span id="card-source" class="tag"></span></h2>
+        <ul id="card-expl"></ul>
+        <div id="card-anchors"></div>
+        <details>
+          <summary>Reward program</summary>
+          <code id="card-reward"></code>
+          <div class="done-label">done when</div>
+          <code id="card-done"></code>
+        </details>
+        <div id="card-warn" class="warn hidden"></div>
+        <div class="row">
+          <button id="btn-approve" class="go">Approve &amp; fly</button>
+          <button id="btn-cancel">Cancel</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>4. Mess with it</h2>
+        <div class="grid2">
+          <button id="btn-gust">Wind gust</button>
+          <button id="btn-drop" class="toggle">Drop obstacle (click)</button>
+          <button id="btn-move" class="toggle trash-only">Move bag (click)</button>
+        </div>
+        <div class="ocean-only">
+          <label class="slider">Wave height <span id="wave-val">1.0x</span>
+            <input id="wave-scale" type="range" min="0" max="3" step="0.1" value="1">
+          </label>
+          <div id="disable-row" class="grid3"></div>
+        </div>
+        <div class="row">
+          <button id="btn-stop">Stop</button>
+          <button id="btn-reset">Reset world</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>z map</h2>
+        <canvas id="zmap" width="300" height="170"></canvas>
+        <div id="zmap-note" class="note"></div>
+      </section>
+    </aside>
+  </div>
+  <script type="module" src="/static/main.js"></script>
+</body>
+</html>

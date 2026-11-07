@@ -1,0 +1,11 @@
+.venv/
+.venv-py39/
+build/
+*.egg-info/
+__pycache__/
+.pytest_cache/
+*.pt
+runs/
+logs/
+*.rrd
+.DS_Store
