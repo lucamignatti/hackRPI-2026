@@ -41,16 +41,15 @@ Set `GEMINI_API_KEY` to compile missions with Gemini. Without it, the mission pa
      Hover an item for its name and type; the item an anchor is bound to gets a label.
    - **Organ delivery**: long-range, fast delivery between remote clinics. Carry the organ cooler (`item_0`)
      from the blue pickup pad (`pad_pickup`) to the green drop-off pad (`pad_dropoff`), 300 to 700 m away, at up
-     to 18 m/s, across hills, mountains, valleys and lakes with beaches, past villages (thatched huts, clinic
-     buildings, acacias, rocks), vultures circling 15 to 60 m up, and the red no-fly cylinders
+     to 18 m/s, across hills, mountains, valleys and lakes with beaches, past clinic
+     buildings, acacias, rocks, vultures circling 15 to 60 m up, and the red no-fly cylinders
      (`nofly_0`, `nofly_1`). The camera follows the drone here (toggle **Follow drone**); the speed gauge shows
      speed against the scene's limit. Episodes are 90 s.
-   - **Ocean**: three drones haul a net over a fish school and back to the boat among whales (dark blue),
+   - **Ocean**: four drones, one per net corner, haul a net over a fish school and back to the boat among whales (dark blue),
      dolphins (grey) and turtles (green). An animal caught in the net turns red and the **bycatch** gauge says which.
    - **World**: one 400 m map with everything at once and three drones (up to 12 m/s): hills, lakes and a coast
      into open sea (water is the tide level plus waves everywhere), a town (buildings, cars, curbside trash, the
-     garbage truck `bin`), countryside litter and non-trash items, two clinics with `pad_pickup` / `pad_dropoff`
-     and huts, the boat / net / fish / animals at sea, trees, rocks, birds and no-fly zones. Each drone can get
+     garbage truck `bin`), countryside litter and non-trash items, two clinics with `pad_pickup` / `pad_dropoff`, the boat / net / fish / animals at sea, trees, rocks, birds and no-fly zones. Each drone can get
      its own job: "drone 0 pick up the pizza box and drop it in the garbage truck, drone 1 deliver the organ
      cooler to the clinic, drone 2 fly to the boat" (drones not named share the rest of the text, e.g. "the
      other drones collect trash"; one shared carry text sends every drone to a different item). The card lists
@@ -74,7 +73,7 @@ Set `GEMINI_API_KEY` to compile missions with Gemini. Without it, the mission pa
      the drones; keys 1-3, O for overview) chooses which drone to follow, and the line under it shows that
      drone's job (and "done" once it has met its goal). Orbit / zoom still work while following.
    - **Stop** / **Reset world**. After a reset, the last mission can be approved again.
-5. The status pill shows `flying`, `success`, `failure` (crash, net torn, out of bounds) or `timeout`
+5. The status pill shows `flying`, `success`, `failure` (crash, out of bounds) or `timeout`
    (the env's `episode_steps`: 45 s in trash and ocean, 90 s in delivery).
    Gauges show the current reward (the reward program on `g` of drone 0; with per-drone jobs the mean of each
    drone's own reward), payload swing, shield

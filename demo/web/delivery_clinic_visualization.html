@@ -95,9 +95,9 @@
         <div class="text-xs text-[var(--muted-foreground)]">Low-drag fixed-pitch quad</div>
       </div>
       <div>
-        <div class="text-[var(--muted-foreground)]">Origin Clinic 1 (Huts)</div>
+        <div class="text-[var(--muted-foreground)]">Origin Clinic 1</div>
         <div class="font-mono text-blue-400 font-semibold text-sm">Pickup Pad Alpha</div>
-        <div class="text-xs text-[var(--muted-foreground)]">West mesa village</div>
+        <div class="text-xs text-[var(--muted-foreground)]">West mesa clinic</div>
       </div>
       <div>
         <div class="text-[var(--muted-foreground)]">Destination Clinic 2</div>
@@ -155,10 +155,6 @@
         this.nofly = { x: 5.0, y: -25.0, radius: 22.0, height: 60.0 };
 
         // Terrain Features: Mesas, River, Hills
-        this.huts = [
-          { x: -50, y: -28, r: 2.2 }, { x: -60, y: -14, r: 2.5 }, { x: -48, y: -16, r: 2.0 },
-          { x: 52, y: 32, r: 2.4 }, { x: 62, y: 20, r: 2.5 }, { x: 46, y: 20, r: 2.2 }
-        ];
       }
 
       getTerrainHeight(x, y) {
@@ -394,19 +390,6 @@
         ctx.fillStyle = "#fca5a5";
         ctx.font = "bold 11px monospace";
         ctx.fillText("🚫 WILDLIFE RESERVE (NO-FLY)", nfP.x - 70, nfP.y + 4);
-      }
-
-      // Village Huts
-      for (const h of sim.huts) {
-        const hz = sim.getTerrainHeight(h.x, h.y);
-        const hp = project3D(h.x, h.y, hz);
-        if (hp) {
-          const rPx = (h.r / hp.depth) * 750;
-          ctx.fillStyle = "#78350f";
-          ctx.beginPath();
-          ctx.arc(hp.x, hp.y, rPx, 0, Math.PI * 2);
-          ctx.fill();
-        }
       }
 
       // Clinic 1 (West Pickup Pad)

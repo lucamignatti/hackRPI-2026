@@ -140,13 +140,9 @@ class FakeEnv:
                                    "size": [0.4, 0.4, 3.0], "moving": False})
                 self.spheres.append({"name": f"canopy_{j}", "kind": "canopy", "pos": [x, y, self.ground(x, y) + 3.8],
                                      "radius": 1.6, "moving": False})
-            for j, (cx, cy) in enumerate((pk, dp)):           # a clinic and two huts at each pad
+            for j, (cx, cy) in enumerate((pk, dp)):           # a clinic at each pad
                 self.boxes.append({"name": f"clinic_{j}", "kind": "building", "pos": [cx + 10, cy, self.ground(cx + 10, cy) + 2],
                                    "size": [8.0, 6.0, 4.0], "moving": False})
-                for h in range(2):
-                    x, y = cx - 8 + 5 * h, cy + 9
-                    self.boxes.append({"name": f"hut_{2 * j + h}", "kind": "hut", "pos": [x, y, self.ground(x, y) + 1.3],
-                                       "size": [3.0, 3.0, 2.6], "moving": False})
         else:   # ocean
             self.waves = {"amp": [0.12, 0.08, 0.05, 0.03], "k": [0.35, 0.6, 0.9, 1.4], "dir": [0.3, 0.8, -0.4, 1.9],
                           "phase": [0.0, 1.0, 2.0, 3.0]}
@@ -178,7 +174,7 @@ class FakeEnv:
 
     def _build_world(self, g: torch.Generator) -> None:
         """Hills, a lake and a coast (sea on the west), a town with a garbage truck, two clinics with
-        pads and huts, countryside litter, the boat / net / fish / animals at sea, trees, rocks, birds
+        pads, countryside litter, the boat / net / fish / animals at sea, trees, rocks, birds
         and two no-fly zones. Sea and lake share the tide level; waves everywhere on top."""
         r = lambda: float(torch.rand(1, generator=g))
         R, H = self.res, self.arena_half
@@ -214,7 +210,7 @@ class FakeEnv:
                                "size": [1.8, 4.2, 1.5], "moving": False})
         self.boxes.append({"name": "hydrant_0", "kind": "hydrant", "pos": [40.0, -51.0, gr(40, -51) + 0.4],
                            "size": [0.3, 0.3, 0.8], "moving": False})
-        # clinics: pads, a clinic building and two huts each
+        # clinics: pads and a clinic building each
         pk, dp = [-40.0, -140.0], [-50.0, 40.0]
         self.zones.append({"name": "pad_pickup", "kind": "pad_pickup", "pos": pk + [gr(*pk)], "radius": 1.5, "height": 0.1})
         self.zones.append({"name": "pad_dropoff", "kind": "pad_dropoff", "pos": dp + [gr(*dp)], "radius": 1.5,
@@ -222,10 +218,6 @@ class FakeEnv:
         for j, (cx, cy) in enumerate((pk, dp)):
             self.boxes.append({"name": f"clinic_{j}", "kind": "building", "pos": [cx + 10, cy, gr(cx + 10, cy) + 2],
                                "size": [8.0, 6.0, 4.0], "moving": False})
-            for hh in range(2):
-                hx, hy = cx - 8 + 5 * hh, cy + 9
-                self.boxes.append({"name": f"hut_{2 * j + hh}", "kind": "hut", "pos": [hx, hy, gr(hx, hy) + 1.3],
-                                   "size": [3.0, 3.0, 2.6], "moving": False})
         # no-fly zones
         self.zones.append({"name": "nofly_0", "kind": "nofly", "pos": [0.0, 100.0, 0.0], "radius": 15.0, "height": 60.0})
         self.zones.append({"name": "nofly_1", "kind": "nofly", "pos": [120.0, -20.0, 0.0], "radius": 12.0, "height": 60.0})

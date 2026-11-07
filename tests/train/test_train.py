@@ -35,7 +35,7 @@ def trash_obs():
 def ocean_obs():
     torch.manual_seed(0)
     env = make_env("ocean", 4, lidar=True)
-    out = env.step(torch.rand(4, 3, 5) * 2 - 1)
+    out = env.step(torch.rand(4, spec.OCEAN_AGENTS, 5) * 2 - 1)
     return env, out.obs
 
 
@@ -258,15 +258,16 @@ def test_buffer_round_trip(ocean_obs):
     buf = ReplayBuffer(512, 16)
     obs = env.reset()
     z = nets.sphere(torch.randn(4, 16))
-    a = torch.rand(4, 3, 5) * 2 - 1
+    a = torch.rand(4, spec.OCEAN_AGENTS, 5) * 2 - 1
     out = env.step(a)
     buf.add(obs, a, out.obs, out.done, torch.zeros(4, dtype=torch.bool), z)
-    a2 = torch.rand(4, 3, 5) * 2 - 1
+    a2 = torch.rand(4, spec.OCEAN_AGENTS, 5) * 2 - 1
     out2 = env.step(a2)
     reset = torch.tensor([True, False, False, False])
     buf.add(out.obs, a2, out2.obs, out2.done, reset, z)
-    assert len(buf) == 24
-    assert buf.obs_size == 36                         # second step reused 12 rows
+    M = 4 * spec.OCEAN_AGENTS                      # rows per step
+    assert len(buf) == 2 * M
+    assert buf.obs_size == 3 * M                       # second step reused M rows
     s = buf.sample(64)
     assert s["obs"]["lidar"].dtype == torch.uint8 and s["obs"]["lidar"].shape == (64, 3, 16, 64)
     assert s["action"].shape == (64, 5) and s["g"].shape == (64, spec.G_DIM)
@@ -274,14 +275,14 @@ def test_buffer_round_trip(ocean_obs):
     # exact round trip of every transition
     f1, f1n = _flat(obs), _flat(out.obs)
     f2n = _flat(out2.obs)
-    for t in range(24):
+    for t in range(2 * M):
         oi, ni = buf.obs_idx[t], buf.next_idx[t]
-        src_o, src_n = (f1, f1n) if t < 12 else (f1n, f2n)
-        j = t % 12
+        src_o, src_n = (f1, f1n) if t < M else (f1n, f2n)
+        j = t % M
         for k in buf.obs:
             assert torch.equal(buf.obs[k][oi], src_o[k][j]), k
             assert torch.equal(buf.obs[k][ni], src_n[k][j]), k
-        assert torch.equal(buf.action[t], (a if t < 12 else a2).reshape(12, 5)[j])
+        assert torch.equal(buf.action[t], (a if t < M else a2).reshape(M, 5)[j])
     # after the reset of world 0 its rows are written fresh, others reused
     env.reset(torch.tensor([0]))
     g = buf.sample_g(10)
@@ -345,16 +346,16 @@ def test_agent_save_load_identical_actions(tmp_path, ocean_obs, method):
     assert ag.method == method
     z = nets.sphere(torch.randn(4, ag.d))
     a0 = ag.act(obs, z)
-    assert a0.shape == (4, 3, 5)
+    assert a0.shape == (4, spec.OCEAN_AGENTS, 5)
     p = str(tmp_path / "a.pt")
     ag.save(p, with_optim=True)
     ag2 = Agent.load(p, device="cpu")
     assert ag2.d == ag.d and ag2.method == method
     assert torch.equal(ag2.act(obs, z), a0)
     assert torch.equal(ag2.encode_g(obs["g"]), ag.encode_g(obs["g"]))
-    zr = ag.infer_z(obs["g"].reshape(-1, spec.G_DIM), torch.randn(12))
+    zr = ag.infer_z(obs["g"].reshape(-1, spec.G_DIM), torch.randn(4 * spec.OCEAN_AGENTS))
     assert zr.shape == (ag.d,)
-    assert ag.act(obs, zr).shape == (4, 3, 5)
+    assert ag.act(obs, zr).shape == (4, spec.OCEAN_AGENTS, 5)
 
 
 # ============================================================ end to end

@@ -319,8 +319,7 @@ class DemoSession:
             elif delivered:
                 self._finish("success", f"Item delivered in {self.step_count * spec.POLICY_DT:.1f} s.")
             elif bool(out.done[0]):
-                why = "collision" if bool(out.events["collision"][0].any()) else \
-                    "net torn" if bool(out.events["tear"][0].any()) else "crash / out of bounds"
+                why = "collision" if bool(out.events["collision"][0].any()) else "crash / out of bounds"
                 self._finish("failure", f"Episode ended: {why}.")
             elif self.step_count >= self.max_steps:
                 self._finish("timeout", f"Time limit ({self.max_steps * spec.POLICY_DT:.0f} s) reached without completing.")

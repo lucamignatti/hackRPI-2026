@@ -326,7 +326,7 @@ def test_delivery_layout_is_long_range_and_remote():
     assert (d > 250).all()                                           # clinics far apart
     relief = env.terrain.h.flatten(1).amax(-1) - env.terrain.h.flatten(1).amin(-1)
     assert (relief > 30).all()                                       # hills, mesas, valleys
-    assert ((env.box_kind == BK["hut"]) & env.box_active).sum(-1).min() >= 6   # villages
+    assert ((env.box_kind == BK["building"]) & env.box_active).sum(-1).min() >= 2   # a clinic at each pad
     assert torch.allclose(env.it_pos[:, 0, :2], env.zone_c[:, 3, :2])  # cooler waits at the pickup pad
 
 
@@ -345,6 +345,8 @@ def test_animals_move_and_bycatch_when_tangled():
     for _ in range(20):
         env.step(zeros(env))
     assert (env.animals.pos - p0).norm(dim=-1).mean() > 0.3
+    env.pos[0, 0] = env.net_handles()[0, 0] - torch.tensor(spec.GRIPPER_OFFSET)   # drone 0 over its corner
+    env.vel[0, 0] = 0.0
     env.corner_held_by[0, 0] = 0                                     # someone holds the net
     env.holding[0, 0] = 0
     env.animals.pos[0, 1] = env.net.pos[0, 20]                       # a dolphin swims into it
@@ -486,7 +488,7 @@ def test_world_layout_contains_everything():
     assert env.num_agents == spec.WORLD_AGENTS and env.arena_half == 200.0 and env.terrain.res == 128
     for i in range(4):
         kinds = env.box_kind[i][env.box_active[i]].tolist()
-        assert kinds.count(BK["building"]) >= 9 and kinds.count(BK["truck"]) == 1 and kinds.count(BK["hut"]) >= 4
+        assert kinds.count(BK["building"]) >= 30 and kinds.count(BK["truck"]) == 1
         assert int(env.box_kind[i, env.boat_slot if hasattr(env, "boat_slot") else spec.MAX_BOXES - 2]) == BK["boat"]
         for z in ("bin", "pad_pickup", "pad_dropoff", "boat"):
             assert bool(env.zone_active[i, ZSL[z]]), z
@@ -647,3 +649,74 @@ def test_pretraining_uses_selectors():
     env = make_env("world", 64, lidar=False, seed=0)
     assert bool((env.anc_sel > 0).any())
     spec.check_obs(env.observe(), 64, env.num_agents)
+
+
+
+# ---------------------------------------------------------------- dense city, 4-drone ocean, net collisions, fish
+def test_city_is_densely_packed():
+    import numpy as np
+    env = make_env("trash", 4, lidar=False, city_prob=1.0, seed=3)
+    H = env.arena_half
+    xs = torch.linspace(-H, H, 200)
+    X, Y = torch.meshgrid(xs, xs, indexing="xy")
+    for i in range(4):
+        m = env.box_active[i] & (env.box_kind[i] == BK["building"])
+        assert int(m.sum()) >= 30
+        c, h = env.box_c[i][m], env.box_h[i][m]
+        occ = ((X[..., None] - c[:, 0]).abs() < h[:, 0]) & ((Y[..., None] - c[:, 1]).abs() < h[:, 1])
+        assert occ.any(-1).float().mean() > 0.25                         # blocks are built up, streets narrow
+
+
+def test_ocean_has_four_drones_one_per_corner():
+    env = make_env("ocean", 2, lidar=False)
+    assert env.num_agents == 4 == spec.OCEAN_AGENTS
+    spec.check_obs(env.observe(), 2, 4)
+
+
+def test_drone_touching_the_net_crashes():
+    env = make_env("ocean", 1, lidar=False, shield=False)
+    env.pos[0, 0] = env.net.pos[0, 27] + torch.tensor([0.0, 0.0, 0.2])   # rotors in the mesh
+    env.vel.zero_()
+    out = env.step(zeros(env))
+    assert bool(out.done[0]) and bool(out.events["collision"][0, 0])
+
+
+def test_net_cannot_pass_through_the_boat_or_seabed():
+    from skyhand.env.core import BOAT_SLOT
+    env = make_env("ocean", 1, lidar=False)
+    c, h = env.box_c[0, BOAT_SLOT], env.box_h[0, BOAT_SLOT]
+    env.net.pos[0, 30] = c                                               # a node inside the hull
+    env.net.pos[0, 31, 2] = -40.0                                        # a node under the seabed
+    env.step(zeros(env))
+    rel = (env.net.pos[0, 30] - env.box_c[0, BOAT_SLOT]).abs()
+    assert not bool((rel < env.box_h[0, BOAT_SLOT]).all())
+    assert float(env.net.pos[0, 31, 2]) >= float(env.ground_height(env.net.pos[:, 31:32, :2])[0, 0])
+
+
+def test_fish_motion_is_stochastic_but_seeded():
+    a = make_env("ocean", 2, lidar=False, seed=5)
+    b = make_env("ocean", 2, lidar=False, seed=5)
+    for _ in range(20):
+        a.step(zeros(a))
+        b.step(zeros(b))
+    assert torch.allclose(a.fish.pos, b.fish.pos)                        # same seed, same fish
+    v = a.fish.vel
+    turn = []
+    for _ in range(10):
+        a.step(zeros(a))
+        turn.append((a.fish.vel - v).norm(dim=-1).mean())
+        v = a.fish.vel.clone()
+    assert float(torch.stack(turn).mean()) > 0.02                       # fish keep changing course
+
+
+def test_net_never_tears_corner_slips_instead():
+    env = make_env("ocean", 1, lidar=False, shield=False)
+    env.pos[0, 0] = env.net_handles()[0, 0] - torch.tensor(spec.GRIPPER_OFFSET)
+    env.vel.zero_()
+    env.corner_held_by[0, 0] = 0
+    env.holding[0, 0] = env.corner_offset                               # handle index of corner 0
+    env.pos[0, 0, :2] += 12.0                                            # yank the corner far away
+    out = env.step(zeros(env))
+    assert not bool(out.done[0])                                         # no tear, the episode goes on
+    assert bool(out.events["slip"][0, 0]) and bool(out.events["release"][0, 0])
+    assert int(env.corner_held_by[0, 0]) == -1 and int(env.holding[0, 0]) == -1

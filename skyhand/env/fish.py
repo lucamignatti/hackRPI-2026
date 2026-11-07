@@ -25,6 +25,32 @@ class FishSchools:
         self.flee_gain = torch.ones(n, device=device)
         self.home_c = torch.zeros(n, 2, device=device)                     # region the schools stay in
         self.home_r = torch.full((n,), spec.ARENA_HALF - 4.0, device=device)
+        # counter-based randomness: a per-world key and step counter (both part of the state)
+        # drive the darting and course changes, so a copied world replays the same future
+        self.key = torch.zeros(n, dtype=torch.long, device=device)
+        self.tick = torch.zeros(n, dtype=torch.long, device=device)
+
+    _M = 0xFFFFFFFF
+
+    def _rand(self, env_ids: torch.Tensor, salt: int, *shape: int) -> torch.Tensor:
+        """Uniform [0, 1) of shape [len(env_ids), *shape] hashed from (key, tick, salt, index)."""
+        M = self._M
+        num = 1
+        for d in shape:
+            num *= d
+        idx = torch.arange(num, device=self.device, dtype=torch.long)
+        k = (self.key[env_ids] & 0x7FFFFFFF)[:, None]
+        t = (self.tick[env_ids] & 0x7FFFFFFF)[:, None]
+        x = ((k * 0x9E3779B1) & M) ^ ((t * 0x85EBCA77) & M) ^ ((idx[None] * 0xC2B2AE3D) & M) ^ ((salt * 0x27D4EB2F) & M)
+        for mul in (0x7FEB352D, 0x446F86B3):                                  # integer avalanche
+            x = x ^ (x >> 16)
+            x = (x * mul) & M
+        x = x ^ (x >> 15)
+        return ((x.float() + 0.5) / 4294967296.0).view(len(env_ids), *shape)
+
+    def _randn(self, env_ids: torch.Tensor, salt: int, *shape: int) -> torch.Tensor:
+        u1, u2 = self._rand(env_ids, salt, *shape), self._rand(env_ids, salt + 7919, *shape)
+        return torch.sqrt(-2.0 * torch.log(u1)) * torch.cos(2 * math.pi * u2)
 
     def _in_home(self, env_ids: torch.Tensor, k: int, r) -> torch.Tensor:
         """k random xy points [m, k, 2] inside each world's home disc."""
@@ -49,11 +75,17 @@ class FishSchools:
         v = torch.stack([torch.cos(ang), torch.sin(ang), torch.zeros_like(ang)], -1) * 0.6
         self.vel[env_ids] = v[:, self.school]
         self.caught[env_ids] = False
-        self._new_targets(env_ids, gen)
+        self.key[env_ids] = torch.randint(0, 2 ** 31 - 1, (m,), generator=gen).to(self.device)
+        self.tick[env_ids] = 0
+        self._new_targets(env_ids)
 
-    def _new_targets(self, env_ids, gen=None):
+    def _new_targets(self, env_ids, salt: int = 1):
         m = len(env_ids)
-        r = lambda *s: torch.rand(*s, generator=gen).to(self.device)
+        cnt = [0]
+
+        def r(*s):
+            cnt[0] += 1
+            return self._rand(env_ids, salt * 16 + cnt[0], *s[1:])
         self.target[env_ids] = torch.cat([self._in_home(env_ids, self.s, r), -(0.5 + 0.8 * r(m, self.s, 1))], -1)
 
     def school_centers(self) -> torch.Tensor:
@@ -61,8 +93,11 @@ class FishSchools:
         return torch.einsum("nfd,fs->nsd", self.pos, oh) / oh.sum(0)[None, :, None]
 
     def step(self, dt: float, drones: torch.Tensor, surface: torch.Tensor,
-             net_nodes: Optional[torch.Tensor] = None) -> None:
-        """drones [N, A, 3]; surface [N, F] wave height above each fish."""
+             net_nodes: Optional[torch.Tensor] = None, gen: Optional[torch.Generator] = None,
+             jitter: float = 0.9, turn_prob: float = 0.01) -> None:
+        """drones [N, A, 3]; surface [N, F] wave height above each fish.
+        jitter: per-fish random acceleration (m/s^2); turn_prob: chance per step that a school
+        picks a new destination, so schools wander unpredictably."""
         p, v = self.pos, self.vel
         centers = self.school_centers()
         oh = torch.nn.functional.one_hot(self.school, self.s).float()
@@ -94,15 +129,24 @@ class FishSchools:
         off = p[..., :2] - self.home_c[:, None]
         dist = off.norm(dim=-1, keepdim=True).clamp_min(1e-3)
         acc[..., :2] -= 2.0 * (dist - self.home_r[:, None, None]).clamp(min=0.0) * off / dist
+        all_ids = torch.arange(self.n, device=p.device)
+        self.tick += 1
+        noise = self._randn(all_ids, 3, self.f, 3) * torch.tensor([1.0, 1.0, 0.4], device=p.device)
+        acc = acc + jitter * noise                                             # individual darting
         v = v + dt * acc
         speed = v.norm(dim=-1, keepdim=True)
-        v = v / speed.clamp_min(1e-6) * speed.clamp(0.15, 0.8)
+        v = v / speed.clamp_min(1e-6) * speed.clamp(0.1, 1.2)
+        turn = self._rand(all_ids, 5, self.s) < turn_prob
+        if turn.any():                                                         # sudden change of course
+            nt = self.target.clone()
+            self._new_targets(all_ids, salt=2)
+            self.target = torch.where(turn.unsqueeze(-1), self.target, nt)
         free = ~self.caught.unsqueeze(-1)
         self.vel = torch.where(free, v, self.vel)
         self.pos = torch.where(free, p + dt * v, self.pos)
         reached = (centers - self.target).norm(dim=-1).max(-1).values < 1.5
         if reached.any():
-            self._new_targets(torch.nonzero(reached).squeeze(-1))
+            self._new_targets(torch.nonzero(reached).squeeze(-1), salt=3)
 
     def update_capture(self, inside: torch.Tensor, net_pos: torch.Tensor, net_vel: torch.Tensor,
                        net_held: torch.Tensor) -> None:
@@ -121,9 +165,9 @@ class FishSchools:
 
     def state(self) -> dict:
         return {"pos": self.pos, "vel": self.vel, "target": self.target, "caught": self.caught, "caught_off": self.caught_off,
-                "home_c": self.home_c, "home_r": self.home_r}
+                "home_c": self.home_c, "home_r": self.home_r, "key": self.key, "tick": self.tick}
 
     def load(self, st: dict, env_ids: torch.Tensor, src: Optional[torch.Tensor] = None) -> None:
         src = env_ids if src is None else src
-        for k in ("pos", "vel", "target", "caught", "caught_off", "home_c", "home_r"):
+        for k in ("pos", "vel", "target", "caught", "caught_off", "home_c", "home_r", "key", "tick"):
             getattr(self, k)[env_ids] = st[k][src]

@@ -735,10 +735,13 @@ class ScriptedController:
         self.v_cruise = 0.5 * self.max_speed if self.max_speed <= 8 else 0.8 * self.max_speed
         self.vz_cruise = min(2.0 * self.max_vz / 3.0, 0.9 * self.max_vz)
         self.avoid_range = max(self.AVOID_RANGE, self.AVOID_TIME * self.v_cruise)
-        # cruise height above the terrain / water; delivery stays above acacias and huts,
+        # cruise height above the terrain / water; delivery stays above acacias and clinics,
         # the world above trees and most of the town (LiDAR climbs over the rest)
         self.cruise_carry = {"trash": 4.5, "delivery": 12.0, "world": 10.0}.get(scene, 2.5)
         self.cruise_haul = 2.5
+        # position gain (1/s) for the horizontal command: the fast long-range drone lags its velocity
+        # command, and 1.2 makes it orbit the pickup point instead of settling over it
+        self.k_xy = 0.8 if self.max_speed > 8 else 1.2
         self.drop_h = 1.2                              # above the drop-off anchor point
         self.grab_r = 0.08
         self.phase = torch.zeros(num_envs, num_agents, dtype=torch.long, device=device)
@@ -912,7 +915,7 @@ class ScriptedController:
         vmax_xy = torch.where(ph == 3, torch.full_like(height, 1.0), vmax_xy)
         vmax_xy = torch.where(blocked, torch.full_like(height, 0.5), vmax_xy)
         vmax_xy = torch.where(H & (ph >= 2), torch.full_like(height, 1.2), vmax_xy)
-        v = 1.2 * tgt
+        v = torch.cat([self.k_xy * tgt[..., :2], 1.2 * tgt[..., 2:]], -1)
         vxy = v[..., :2]
         n = vxy.norm(dim=-1, keepdim=True)
         # brake in time: speed that can still stop within the remaining distance (~3 m/s^2)

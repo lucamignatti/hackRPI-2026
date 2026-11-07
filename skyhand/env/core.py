@@ -48,7 +48,7 @@ SEABED_Z = -12.0
 FAR = 1.0e4
 ANCHOR_KIND = {k: i for i, k in enumerate(spec.ANCHOR_TYPES)}
 PRIV_TYPE = {k: i for i, k in enumerate(spec.PRIV_TYPES)}
-BOX_KINDS = ("building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "bin", "hut")
+BOX_KINDS = ("building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "bin")
 SPHERE_KINDS = ("rock", "canopy", "bird")
 ZONE_KINDS = ("bin", "truck", "pad_pickup", "pad_dropoff", "nofly", "boat")
 VARIANTS = ("city", "terrain", "delivery", "ocean", "world")
@@ -744,11 +744,14 @@ class SkyEnv:
         self.box_moving[ids, b] = False
         self.box_kind[ids, b] = BK["boat"]
 
-    def _reset_sea_life(self, ids: torch.Tensor, net_xy: torch.Tensor, home_c: torch.Tensor, home_r: torch.Tensor) -> None:
+    def _reset_sea_life(self, ids: torch.Tensor, net_xy: torch.Tensor, home_c: torch.Tensor, home_r: torch.Tensor,
+                        animal_r: Optional[torch.Tensor] = None) -> None:
+        """Fish schools stay in the disc (home_c, home_r); animals roam animal_r (default home_r), which
+        must cover the net so that bycatch can happen where the net is."""
         m = len(ids)
         self.net.reset(ids, torch.cat([net_xy, torch.zeros(m, 1, device=self.device)], -1), self._rand(m) * 2 * math.pi)
         self.fish.reset(ids, self.gen, home_c, home_r)
-        self.animals.reset(ids, self.gen, home_c, home_r)
+        self.animals.reset(ids, self.gen, home_c, home_r if animal_r is None else animal_r)
         self.turbidity[ids] = 0.1 + 0.7 * self._rand(m)
 
     def _reset_ocean(self, ids: torch.Tensor, m: int, a: int) -> None:
@@ -766,8 +769,10 @@ class SkyEnv:
         self.zone_kind[ids, z1] = ZK["nofly"]
         self.zone_active[ids, z1] = nf & ((nf_xy - boat_xy).norm(dim=-1) > 8.0)
         net_xy = boat_xy + torch.nn.functional.normalize(self._randn(m, 2), dim=-1) * (12.0 + 6.0 * self._rand(m, 1))
-        net_xy = net_xy.clamp(-H + 7, H - 7)
-        self._reset_sea_life(ids, net_xy, torch.zeros(m, 2, device=self.device), torch.full((m,), H - 4.0, device=self.device))
+        # net centre inside the fish disc (schools are reachable), animals roam a wider disc around it
+        net_xy = net_xy * ((H - 9.0) / net_xy.norm(dim=-1, keepdim=True).clamp_min(1e-6)).clamp(max=1.0)
+        self._reset_sea_life(ids, net_xy, torch.zeros(m, 2, device=self.device), torch.full((m,), H - 9.0, device=self.device),
+                             torch.full((m,), H - 3.0, device=self.device))
         k = torch.arange(a, device=self.device) % 4
         cxy = self.net.pos[ids][:, self.net.corners[k], :2]
         out = torch.nn.functional.normalize(cxy - net_xy[:, None], dim=-1)
@@ -839,11 +844,9 @@ class SkyEnv:
         events["shield"] = self.shield_hit
         if self.has_items:
             events["delivered"] |= self._check_delivered().unsqueeze(-1).expand(n, a)
-        torn = self.net.torn if self.net is not None else torch.zeros(n, dtype=torch.bool, device=self.device)
-        events["tear"] |= torn.unsqueeze(-1).expand(n, a)
         ceiling = self.terrain.max_height().clamp_min(0.0)[:, None] + 60.0
         oob = ((self.pos[..., :2].abs() > self.arena_half + 5).any(-1) | (self.pos[..., 2] > ceiling)) & self.alive
-        done = crash | torn | oob.any(-1) | ~self.alive.any(-1)
+        done = crash | oob.any(-1) | ~self.alive.any(-1)
         truncated = (self.steps >= self.episode_steps) & ~done
         return StepOut(obs=self._obs(), done=done, truncated=truncated, events=events,
                        info={"shield_count": self.shield_count.clone()})
@@ -992,8 +995,21 @@ class SkyEnv:
         wh = self.water_height(self.net.pos[..., :2])
         wv = self.waves.water_velocity(self.net.pos - torch.nn.functional.pad(
             self.terrain.water_level(self.t).view(-1, 1, 1).expand(-1, self.net.p, 1), (2, 0)), self.t)
-        pin_force, stretch = self.net.step(spec.POLICY_DT, pinned, pin_pos, wh, wv)
+        floor = self.ground_height(self.net.pos[..., :2])
+        hull = (self.box_c[:, BOAT_SLOT:BOAT_SLOT + 1], self.box_h[:, BOAT_SLOT:BOAT_SLOT + 1],
+                self.box_active[:, BOAT_SLOT:BOAT_SLOT + 1])
+        pin_force, stretch = self.net.step(spec.POLICY_DT, pinned, pin_pos, wh, wv, floor=floor, boxes=hull)
         self.net_stretch = stretch.clamp_min(0.0)
+        # the net never tears: a corner pulled too far slips out of its gripper (a release event)
+        for c in range(4):
+            slip = self.net.slip[:, int(self.net.corners[c])] & (self.corner_held_by[:, c] >= 0)
+            if slip.any():
+                who = self.corner_held_by[:, c].clamp_min(0)
+                lost_grip = slip.unsqueeze(-1) & (torch.arange(a, device=self.device)[None] == who[:, None])
+                events["slip"] |= lost_grip
+                events["release"] |= lost_grip
+                self.holding = torch.where(lost_grip, torch.full_like(self.holding, -1), self.holding)
+                self.corner_held_by[:, c] = torch.where(slip, torch.full_like(who, -1), self.corner_held_by[:, c])
         f = torch.zeros(n, a, 3, device=self.device)
         for c in range(4):
             holder = self.corner_held_by[:, c]
@@ -1003,7 +1019,7 @@ class SkyEnv:
         lim = 2.0 * GRAVITY * spec.DRONE_MASS
         self.net_force = f.clamp(-lim, lim)
         drones = torch.where(self.alive.unsqueeze(-1), self.pos, torch.full_like(self.pos, FAR))
-        self.fish.step(spec.POLICY_DT, drones, self.water_height(self.fish.pos[..., :2]), self.net.pos)
+        self.fish.step(spec.POLICY_DT, drones, self.water_height(self.fish.pos[..., :2]), self.net.pos, gen=self.gen)
         net_held = (self.corner_held_by >= 0).any(-1)
         self.fish.update_capture(self.net.contains(self.fish.pos), self.net.pos, self.net.vel, net_held)
         self.fish_frac = self.fish.caught.float().mean(-1)
@@ -1128,7 +1144,10 @@ class SkyEnv:
         self.pos[..., 2] = torch.where(soft, ground + r, self.pos[..., 2])
         self.vel[..., 2] = torch.where(soft, self.vel[..., 2].clamp_min(0.0), self.vel[..., 2])
         wet = self.pos[..., 2] < water + 0.05
-        hit = (hit_box | hit_sph | hit_mate | hard | wet) & alive
+        hit_net = torch.zeros_like(wet)
+        if self.has_net:                    # rotors and net ropes do not mix
+            hit_net = self.net.segment_distance(self.pos) < r + 0.05
+        hit = (hit_box | hit_sph | hit_mate | hard | wet | hit_net) & alive
         self.collided |= hit
         return hit.any(-1)
 

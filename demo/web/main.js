@@ -620,9 +620,6 @@ function createBox(it) {
     add(unitCyl, red, 0, 0, -0.1, 0.8, 0.8, 0.8);
     add(unitSphere, red, 0, 0, 0.3, 0.4, 0.4, 0.25);
     add(unitCyl, red, 0, 0, 0.0, 1.1, 0.25, 0.12).rotation.z = Math.PI / 2;
-  } else if (k === "hut") {
-    add(unitCyl, std(0xa0663a, { roughness: 1 }), 0, 0, -0.15, 1, 1, 0.7);              // mud wall
-    add(new THREE.ConeGeometry(0.62, 0.5, 16).rotateX(Math.PI / 2), std(0xc9a24a, { roughness: 1, flatShading: true }), 0, 0, 0.45);   // thatch
   } else if (k === "bin") {
     add(unitCyl, std(0x3d8bfd, { roughness: 0.6 }), 0, 0, 0, 1, 1, 1);
     add(unitCyl, std(0x1d3f73), 0, 0, 0.5, 1.05, 1.05, 0.06);

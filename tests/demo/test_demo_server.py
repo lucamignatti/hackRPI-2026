@@ -24,7 +24,7 @@ from skyhand import spec
 WEB = Path(__file__).resolve().parents[2] / "demo" / "web"
 RENDER_KEYS = {"t", "scene", "variant", "arena_half", "terrain", "water", "drones", "items", "boxes", "spheres",
                "zones", "anchors", "boat", "net", "fish", "animals", "lidar", "shield_hits", "wind"}
-BOX_KINDS = {"building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "hut", "bin"}
+BOX_KINDS = {"building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "bin"}
 SPHERE_KINDS = {"rock", "canopy", "bird"}
 ZONE_KINDS = {"bin", "truck", "pad_pickup", "pad_dropoff", "nofly", "boat"}
 EXAMPLES = {"trash": "pick up the trash bag and put it in the bin without hitting the cars",
@@ -123,7 +123,8 @@ def check_render_state(st, scene, num_agents):
         assert st["boat"] is not None and len(st["fish"]) > 0 and st["animals"] and st["items"]
         zk = {z["kind"] for z in st["zones"]}
         assert {"pad_pickup", "pad_dropoff"} <= zk and zk & {"truck", "bin"}     # no-fly zones vary per world
-        assert {"building", "hut"} <= {b["kind"] for b in st["boxes"]}
+        kinds = {b["kind"] for b in st["boxes"]}
+        assert "building" in kinds
     else:
         assert water is None or water["waves"] is None
         assert st["items"], "terrain scenes have items"

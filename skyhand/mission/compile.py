@@ -105,7 +105,7 @@ _EXAMPLES = [
          "reward": _OCEAN_REWARD,
          "done_when": "fish_in_net > 0.5 and distxy(net, a1) < 2.5 and not bycatch",
          "explanation": ("Each drone grabs its own net corner, the team sweeps the net over the fish school and hauls "
-                         "it to the boat without tearing the net, keeping whales, dolphins and turtles out of it."),
+                         "it to the boat without overstretching the net, keeping whales, dolphins and turtles out of it."),
      }),
     ("world",
      {"item_2": "trash_bag (trash) at [-41.0, 12.0, 0.3]",
@@ -186,8 +186,8 @@ Scenes:
   delivery: item_0 is the organ cooler (handle item_0.handle) waiting at pad_pickup; deliver it to pad_dropoff
     gently (swing / jerk / tilt penalties), avoid nofly_0 and nofly_1, and stay well above the terrain
     (penalise low height while carrying; there are hills, mountains, valleys and lakes, see over_water).
-  ocean: a team of drones holds the net corners (net.corner_{agent}); haul fish to the boat without tearing the
-    net (net_stretch) and keep marine animals (whale_0, dolphin_*, turtle_*) out of the net: penalise bycatch and
+  ocean: a team of drones holds the net corners (net.corner_{agent}); haul fish to the boat without overstretching
+    the net (net_stretch; an overstretched corner slips out of its gripper) and keep marine animals (whale_0, dolphin_*, turtle_*) out of the net: penalise bycatch and
     reward animal_dist.
   world: one 400 m map with all of the above and 3 drones (drone_0..drone_2): a town with trash and the garbage
     truck ("bin"), countryside litter, two clinics (pad_pickup, pad_dropoff), the open sea with "boat", the net,
@@ -659,7 +659,7 @@ def _single(text: str, scene: str, entities: Dict[str, str], drone: str = "drone
         done = "fish_in_net > 0.5 and distxy(net, a1) < 2.5 and not bycatch"
         expl = ("Each drone grabs its own net corner, the team sweeps the net over "
                 f"{school.replace('_', ' ') if school else 'the fish'} and hauls the catch to the boat "
-                "without tearing the net or tangling whales, dolphins or turtles in it")
+                "without overstretching the net or tangling whales, dolphins or turtles in it")
         steps = [
             {"reward": "-dist(drone, a0) + 3*holding", "done_when": "holding",
              "explanation": "Each drone grabs its net corner."},

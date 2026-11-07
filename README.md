@@ -102,7 +102,7 @@ Each area below can be picked up on its own. Every area lists its folders, its t
 **Folders:** `skyhand/env/`, `tests/env/`
 
 1. Watch the scripted expert in the demo viewer (`--env-expert`) in both scenes, and note anything that looks wrong.
-2. Raise ocean expert delivery above its current 25–31% and cut its bycatch (34–41% of hauls tangle an animal). Its rollouts are the training demonstrations; bycatch and crash segments are already filtered out of them.
+2. Raise ocean expert delivery above its current 19–50% and cut its bycatch (25–50% of hauls tangle an animal). Its rollouts are the training demonstrations; bycatch and crash segments are already filtered out of them.
 3. Run one checkpoint on both backends and compare success rates. The difference is the sim-to-sim gap reported to judges.
 4. Measure step time with LiDAR on at 2048 worlds. If it is the bottleneck, lower the resolution in `skyhand/spec.py`.
 5. Add a test for every physics change.
@@ -157,7 +157,7 @@ Spend the first 30 minutes reading these as a group, in this order:
 **Environments**
 - Grasping is simplified: a handle within reach and the gripper closing counts as a grab.
 - Anchors are 4 fixed slots per drone. A slot can be a selector such as `nearest:trash`, re-resolved every step, which is how "clear all the trash" runs as one mission. `anchor_active` flags in the goal space mark unused slots.
-- Ocean physics is tuned for a proof of concept: a light net, shallow fish schools, and caught fish riding with the net.
+- Ocean physics is tuned for a proof of concept: four drones on a light net, shallow fish schools, and caught fish riding with the net. The net never tears; an overstretched corner slips out of its gripper.
 - Every world has its own terrain, buildings, trees, and items, which a Genesis scene cannot represent, so the Genesis backend only integrates drone rigid bodies. World geometry, contacts, and the LiDAR are shared torch code in both backends.
 - Terrain LiDAR uses Lipschitz-bounded ray marching. It costs most of the env step time when LiDAR is on; measure it at training scale.
 - Delivery runs at a different physical scale: a 600 m arena, up to 18 m/s, 90 s episodes. Actions are normalised per scene, so the same action means a faster speed there.
@@ -201,10 +201,10 @@ Spend the first 30 minutes reading these as a group, in this order:
 
 | Scene | Result |
 |---|---|
-| Trash, city | 84–97% delivered to the garbage truck |
+| Trash, city | 88–94% delivered to the garbage truck |
 | Trash, terrain litter | 94–100% delivered to the bin |
 | Delivery, long range | 81–100% delivered, median 55 s over ~470 m |
-| Ocean | 25–31% deliver fish to the boat, 34–41% bycatch, 9–16% end early |
+| Ocean, four drones | 19–50% deliver fish to the boat, 25–50% bycatch, 0–6% end early |
 | World, three drones on separate tasks | 100% trash to the truck, 100% cooler to the clinic, 100% fly-to-point |
 | World, team net haul | 100% of corners grabbed, 25% deliver fish to the boat, 17% bycatch |
 

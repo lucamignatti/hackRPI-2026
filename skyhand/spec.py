@@ -47,7 +47,7 @@ MAX_TILT = 0.6            # rad, controller tilt limit
 #           curb, a garbage truck as drop-off) or open terrain with scattered litter.
 # delivery: long-range, fast organ delivery between two remote clinics (Zipline-style,
 #           rural Africa): a 600 m arena of hills, mesas, a river valley and lakes,
-#           villages of huts around each clinic, acacia trees, vultures, large no-fly
+#           a clinic building at each pad, acacia trees, vultures, large no-fly
 #           areas such as a wildlife reserve.
 # ocean:    team net fishing among fish schools and marine animals (bycatch).
 # world:    the generic pretraining world that contains all of the above at once: a
@@ -57,7 +57,7 @@ MAX_TILT = 0.6            # rad, controller tilt limit
 SCENES = ("trash", "delivery", "ocean", "world")
 TRASH_AGENTS = 1
 DELIVERY_AGENTS = 1
-OCEAN_AGENTS = 3
+OCEAN_AGENTS = 4          # one drone per net corner
 WORLD_AGENTS = 3
 SCENE_AGENTS = {"trash": TRASH_AGENTS, "delivery": DELIVERY_AGENTS, "ocean": OCEAN_AGENTS, "world": WORLD_AGENTS}
 ARENA_HALF = 25.0         # trash and ocean are 50 x 50 m
@@ -65,12 +65,12 @@ ARENA_HALF = 25.0         # trash and ocean are 50 x 50 m
 # scene's max speed. Delivery is a streamlined fast drone with far less drag.
 SCENE_ARENA_HALF = {"trash": 25.0, "delivery": 300.0, "ocean": 25.0, "world": 200.0}
 SCENE_MAX_SPEED = {"trash": 6.0, "delivery": 18.0, "ocean": 6.0, "world": 12.0}
-SCENE_MAX_VZ = {"trash": 3.0, "delivery": 6.0, "ocean": 3.0, "world": 5.0}
+SCENE_MAX_VZ = {"trash": 4.0, "delivery": 6.0, "ocean": 3.0, "world": 5.0}
 SCENE_DRAG = {"trash": 0.35, "delivery": 0.035, "ocean": 0.35, "world": 0.08}
 SCENE_EPISODE_STEPS = {"trash": 900, "delivery": 1800, "ocean": 900, "world": 1800}
 SCENE_TERRAIN_RES = {"trash": 64, "delivery": 64, "ocean": 64, "world": 128}
 TERRAIN_RES = 64          # heightfield samples per side (default; see SCENE_TERRAIN_RES)
-MAX_BOXES = 48            # buildings, cars, benches, hydrants, truck, boat hull, tree trunks, huts ...
+MAX_BOXES = 64            # buildings (packed city lots), cars, benches, hydrants, truck, boat hull, tree trunks ...
 MAX_SPHERES = 40          # rocks, tree canopies, birds
 MAX_ITEMS = 16            # graspable objects per world
 NET_ROWS = 8
@@ -226,13 +226,13 @@ def check_obs(obs: Dict[str, torch.Tensor], n: int, a: int) -> None:
             assert torch.isfinite(t).all(), f"{k}: non-finite values"
 
 
-EVENT_KEYS = ("collision", "shield", "grasp", "release", "delivered", "tear", "bycatch", "lost")
+EVENT_KEYS = ("collision", "shield", "grasp", "release", "delivered", "slip", "bycatch", "lost")
 
 
 @dataclass
 class StepOut:
     obs: Dict[str, torch.Tensor]
-    done: torch.Tensor                    # [N] bool, terminal (crash, tear)
+    done: torch.Tensor                    # [N] bool, terminal (crash, out of bounds)
     truncated: torch.Tensor               # [N] bool, time limit
     events: Dict[str, torch.Tensor]       # EVENT_KEYS -> [N, A] bool
     info: Dict[str, object] = field(default_factory=dict)
@@ -304,7 +304,7 @@ class SkyEnvAPI(Protocol):
 #   "items":     [{"name": "item_3", "type": ITEM_TYPES entry, "is_trash": bool, "shape": "box"|"sphere",
 #                  "pos": [3], "size": [3], "held": bool, "delivered": bool}],
 #                # delivered items stay listed with delivered=True (trash rests where it was dropped)
-#   "boxes":     [{"name": str, "kind": "building"|"car"|"truck"|"bench"|"hydrant"|"trunk"|"boat"|"dropped"|"bin"|"hut",
+#   "boxes":     [{"name": str, "kind": "building"|"car"|"truck"|"bench"|"hydrant"|"trunk"|"boat"|"dropped"|"bin",
 #                  "pos": [3], "size": [3], "moving": bool}],
 #   "spheres":   [{"name": str, "kind": "rock"|"canopy"|"bird", "pos": [3], "radius": float, "moving": bool}],
 #   "zones":     [{"name": str, "pos": [3], "radius": float, "height": float,

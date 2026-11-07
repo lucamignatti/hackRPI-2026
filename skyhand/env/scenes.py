@@ -150,46 +150,53 @@ def _clear_start(L: Layout, g: Ground, rng: random.Random, near: Tuple[float, fl
     return near[0], near[1], hhi + 4.0
 
 
+def _packed_block(L: Layout, bx: float, by: float, block: float, sidewalk: float, base: float,
+                  lots: int, rng: random.Random, hmin: float = 8.0, hmax: float = 30.0) -> None:
+    """Fill one city block with buildings built lot to lot (thin gaps between them), like a
+    Manhattan block: the block's sidewalk ring stays free for trash piles and hydrants."""
+    span = block - 2 * sidewalk
+    lot = span / lots
+    gap = 0.3
+    block_h = rng.uniform(hmin, hmax)
+    for i in range(lots):
+        for j in range(lots):
+            x0, x1 = bx + sidewalk + i * lot + gap / 2, bx + sidewalk + (i + 1) * lot - gap / 2
+            y0, y1 = by + sidewalk + j * lot + gap / 2, by + sidewalk + (j + 1) * lot - gap / 2
+            ht = min(max(block_h * rng.uniform(0.6, 1.4), hmin * 0.75), hmax * 1.2)
+            L.boxes.append(Box("building", ((x0 + x1) / 2, (y0 + y1) / 2, base + ht / 2),
+                               ((x1 - x0) / 2, (y1 - y0) / 2, ht / 2)))
+
+
 # ---------------------------------------------------------------- trash: city
 def city(rng: random.Random, nofly_prob: float) -> Layout:
     L = Layout("city")
     g = Ground(None, 0.0, -1e4, 0.0)
-    nb = rng.choice([2, 3])
-    block = (2 * H - (nb + 1) * STREET) / nb
-    starts = [-H + STREET + k * (block + STREET) for k in range(nb)]           # block min corner
-    streets = [-H + STREET / 2 + k * (block + STREET) for k in range(nb + 1)]  # street centre lines
-    sidewalk = 2.6                 # wide sidewalks: bags sit at the curb, clear of the walls
+    # a tight grid: big blocks packed lot to lot with buildings, narrow streets between
+    nb = 2
+    street = 4.5
+    block = (2 * H - (nb + 1) * street) / nb
+    starts = [-H + street + k * (block + street) for k in range(nb)]           # block min corner
+    streets = [-H + street / 2 + k * (block + street) for k in range(nb + 1)]  # street centre lines
+    sidewalk = 1.8                 # bags sit at the curb, ~1.3 m clear of the walls
     blocks = [(bx, by) for bx in starts for by in starts]
     for bx, by in blocks:
-        x0, y0, x1, y1 = bx + sidewalk, by + sidewalk, bx + block - sidewalk, by + block - sidewalk
-        parts = [(x0, y0, x1, y1)]
-        if rng.random() < 0.5 and block > 9:
-            if rng.random() < 0.5:
-                mx = rng.uniform(x0 + 2.5, x1 - 2.5)
-                parts = [(x0, y0, mx - 0.4, y1), (mx + 0.4, y0, x1, y1)]
-            else:
-                my = rng.uniform(y0 + 2.5, y1 - 2.5)
-                parts = [(x0, y0, x1, my - 0.4), (x0, my + 0.4, x1, y1)]
-        for a, b, c, d in parts:
-            ht = rng.uniform(5.0, 16.0)
-            L.boxes.append(Box("building", ((a + c) / 2, (b + d) / 2, ht / 2), ((c - a) / 2, (d - b) / 2, ht / 2)))
-    # cars drive back and forth along streets
-    for _ in range(3):
-        along_x = rng.random() < 0.5
-        s = rng.choice(streets) + rng.choice([-0.9, 0.9])   # lanes near the centre, clear of the curb
-        span = H - 2.5
-        speed = rng.uniform(3.0, 6.0)
-        ph = rng.uniform(0, 1)
-        h = (2.1, 0.9, 0.75) if along_x else (0.9, 2.1, 0.75)
-        lane = (-span, s, span, s, speed, ph) if along_x else (s, -span, s, span, speed, ph)
-        L.boxes.append(Box("car", (lane[0], lane[1], 0.75), h, lane))
-    # garbage truck parked on a street; its zone is the drop-off
-    along_x = rng.random() < 0.5
-    s = rng.choice(streets)
-    p = rng.uniform(-H + 6, H - 6)
-    tx, ty = (p, s) if along_x else (s, p)
-    L.boxes.append(Box("truck", (tx, ty, 1.5), (3.0, 1.2, 1.5) if along_x else (1.2, 3.0, 1.5)))
+        _packed_block(L, bx, by, block, sidewalk, 0.0, 3, rng, hmin=6.0, hmax=18.0)
+    # garbage truck parked mid-block on a street; its zone is the drop-off
+    truck_x = rng.random() < 0.5
+    ts = rng.choice(streets)
+    p = rng.choice(starts) + block / 2
+    tx, ty = (p, ts) if truck_x else (ts, p)
+    L.boxes.append(Box("truck", (tx, ty, 1.5), (3.0, 1.2, 1.5) if truck_x else (1.2, 3.0, 1.5)))
     L.zones[0] = ("truck", tx, ty, 3.2, 6.0)
+    # cars drive back and forth down the middle of the other streets
+    lanes = [(ax, s_) for ax in (True, False) for s_ in streets if not (ax == truck_x and s_ == ts)]
+    rng.shuffle(lanes)
+    for along_x, s_ in lanes[:3]:
+        span = H - 2.5
+        h = (2.1, 0.9, 0.75) if along_x else (0.9, 2.1, 0.75)
+        lane = (-span, s_, span, s_, rng.uniform(3.0, 6.0), rng.uniform(0, 1)) if along_x else \
+            (s_, -span, s_, span, rng.uniform(3.0, 6.0), rng.uniform(0, 1))
+        L.boxes.append(Box("car", (lane[0], lane[1], 0.75), h, lane))
     # trash piles on the sidewalk against a building, NYC style
     piles = []
     for _ in range(rng.choice([2, 3])):
@@ -255,7 +262,7 @@ def litter(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
 
 # ---------------------------------------------------------------- delivery (long range, remote)
 def delivery(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
-    """Two remote clinics 300+ m apart, each with a village of huts; acacias, vultures,
+    """Two remote clinics 300+ m apart, each with a clinic building; acacias, vultures,
     and a wildlife-reserve no-fly zone that often sits across the route."""
     L = Layout("delivery")
     half = g.half - 15
@@ -273,14 +280,10 @@ def delivery(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
     L.zones[4] = ("pad_dropoff", bx, by, 3.0, 0.6)
     L.items.append(("cooler", ax, ay))
     keep = [(ax, ay, 8.0), (bx, by, 8.0)]
-    for px, py in ((ax, ay), (bx, by)):                  # clinic building and village huts
+    for px, py in ((ax, ay), (bx, by)):                  # a clinic building beside each pad
         cx, cy = g.spot(rng, max_slope=0.25, near=(px, py, 18.0), avoid=keep)
         L.boxes.append(Box("building", (cx, cy, g(cx, cy) + 2.0), (4.0, 3.0, 2.0)))
         keep.append((cx, cy, 6.0))
-        for _ in range(rng.randint(4, 6)):
-            hx, hy = g.spot(rng, max_slope=0.35, near=(px, py, 45.0), avoid=keep)
-            L.boxes.append(Box("hut", (hx, hy, g(hx, hy) + 1.3), (1.8, 1.8, 1.3)))
-            keep.append((hx, hy, 4.5))
     # wildlife reserve no-fly zones near the middle of the route
     mx, my = (ax + bx) / 2, (ay + by) / 2
     for slot in (1, 2):
@@ -371,7 +374,7 @@ def world(rng: random.Random, res: int, half: float, nofly_prob: float) -> World
     # ---- town: street grid, cars, trash piles at the curb, garbage truck
     x0, y0, x1, y1 = town
     nb = 3
-    street, sidewalk = 7.0, 2.6
+    street, sidewalk = 5.0, 1.8
     block = ((x1 - x0) - (nb + 1) * street) / nb
     xs = [x0 + street + k * (block + street) for k in range(nb)]
     ys = [y0 + street + k * (block + street) for k in range(nb)]
@@ -379,21 +382,20 @@ def world(rng: random.Random, res: int, half: float, nofly_prob: float) -> World
     sy = [y0 + street / 2 + k * (block + street) for k in range(nb + 1)]
     blocks = [(bx, by) for bx in xs for by in ys]
     for bx, by in blocks:
-        a, b, c, d = bx + sidewalk, by + sidewalk, bx + block - sidewalk, by + block - sidewalk
-        ht = rng.uniform(5.0, 16.0)
-        L.boxes.append(Box("building", ((a + c) / 2, (b + d) / 2, plateau + ht / 2), ((c - a) / 2, (d - b) / 2, ht / 2)))
-    for _ in range(3):
-        if rng.random() < 0.5:
-            s_ = rng.choice(sy) + rng.choice([-0.9, 0.9])
+        _packed_block(L, bx, by, block, sidewalk, plateau, 2, rng, hmin=6.0, hmax=18.0)
+    tx = rng.choice(sx)
+    ty = rng.choice(ys) + block / 2                              # parked mid-block
+    L.boxes.append(Box("truck", (tx, ty, plateau + 1.5), (1.2, 3.0, 1.5)))
+    lanes = [("x", s_) for s_ in sy] + [("y", s_) for s_ in sx if s_ != tx]
+    rng.shuffle(lanes)
+    for ax, s_ in lanes[:3]:
+        if ax == "x":
             lane = (x0 + 2, s_, x1 - 2, s_, rng.uniform(3, 6), rng.random())
             hh = (2.1, 0.9, 0.75)
         else:
-            s_ = rng.choice(sx) + rng.choice([-0.9, 0.9])
             lane = (s_, y0 + 2, s_, y1 - 2, rng.uniform(3, 6), rng.random())
             hh = (0.9, 2.1, 0.75)
         L.boxes.append(Box("car", (lane[0], lane[1], plateau + 0.75), hh, lane))
-    tx, ty = rng.choice(sx), rng.uniform(y0 + 6, y1 - 6)
-    L.boxes.append(Box("truck", (tx, ty, plateau + 1.5), (1.2, 3.0, 1.5)))
     L.zones[0] = ("truck", tx, ty, 3.2, 6.0)
     for _ in range(2):
         bx, by = rng.choice(blocks)
@@ -416,10 +418,6 @@ def world(rng: random.Random, res: int, half: float, nofly_prob: float) -> World
         cx, cy = g.spot(rng, max_slope=0.3, near=(px, py, 16.0), avoid=keep)
         L.boxes.append(Box("building", (cx, cy, g(cx, cy) + 2.0), (4.0, 3.0, 2.0)))
         keep.append((cx, cy, 6.0))
-        for _ in range(3):
-            hx, hy = g.spot(rng, max_slope=0.35, near=(px, py, 35.0), avoid=keep)
-            L.boxes.append(Box("hut", (hx, hy, g(hx, hy) + 1.3), (1.8, 1.8, 1.3)))
-            keep.append((hx, hy, 4.5))
     # ---- countryside litter and things that are not trash, near the town edge
     for _ in range(4):
         x, y = g.spot(rng, near=((x0 + x1) / 2, (y0 + y1) / 2, 90.0), avoid=keep)

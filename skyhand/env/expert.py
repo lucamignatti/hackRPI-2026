@@ -297,6 +297,8 @@ def _ocean(env, team: torch.Tensor) -> torch.Tensor:
     away = away / away.norm(dim=-1, keepdim=True).clamp_min(1e-3)
     flee = torch.cat([centroid[:, :2] + away * 4.0, centroid[:, 2:3]], -1)
     drag_t = torch.where(near_an.view(n, 1, 1), flee[:, None] + form, drag_t)
+    lim = env.arena_half - 3.0                                         # never drag the team out of the arena
+    drag_t = torch.cat([drag_t[..., :2].clamp(-lim, lim), drag_t[..., 2:]], -1)
     drag_t[..., 2] = surf + 1.2
     target = torch.where((ph == 4).unsqueeze(-1), drag_t, target)
     lift_t = torch.cat([pos[..., :2], (surf + 3.2).unsqueeze(-1)], -1)

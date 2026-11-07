@@ -73,10 +73,10 @@ def test_net_rest_and_tension():
         f, stretch = net.step(0.05, pinned, pin)
     assert (f[:, net.corners, 2] < 0).all()
     assert (net.pos[..., 2] <= 3.0 + 1e-4).all()
-    assert not net.torn.any()
+    assert not net.slip.any()
 
 
-def test_net_tears_when_overstretched():
+def test_overstretched_corner_slips_instead_of_tearing():
     net = NetSim(1)
     net.reset(torch.arange(1), torch.zeros(1, 3), torch.zeros(1))
     pinned = torch.zeros(1, net.p, dtype=torch.bool)
@@ -85,7 +85,8 @@ def test_net_tears_when_overstretched():
     pin[:, net.corners[0], 0] -= 20.0
     pin[:, net.corners[1], 0] += 20.0
     net.step(0.05, pinned, pin)
-    assert net.torn.all()
+    assert net.slip[0, net.corners[:2]].all() and int(net.slip.sum()) == 2   # only the pulled corners
+    assert not hasattr(net, "torn")
 
 
 def test_net_contains():
