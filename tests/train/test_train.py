@@ -507,3 +507,30 @@ def test_expert_worlds_flagged_and_excluded_from_disc_negatives(tmp_path):
     assert m["d_loss"] == 0.0 and all(math.isfinite(v) for v in m.values())
     batch["expert"] = torch.zeros_like(batch["expert"])
     assert tr.agent.update(batch, tr.demo)["d_loss"] > 0.0
+
+
+def test_eval_metrics_reach_csv_when_intervals_differ(tmp_path):
+    """eval_every=3 and log_every=2 never coincide before iter 6; the eval at iter 3
+    must still appear in the iter-4 row, and env rates are averaged over the window."""
+    from skyhand.train.train import main
+    out = str(tmp_path / "run_eval")
+    main(["--tiny", "--scene", "trash", "--device", "cpu", "--steps", "4", "--out", out,
+          "--set", "batch_size=8", "--set", "log_every=2", "--set", "eval_every=3",
+          "--set", "eval_envs=2", "--set", "eval_steps=2"])
+    rows = list(csv.DictReader(open(os.path.join(out, "metrics.csv"))))
+    assert len(rows) == 2
+    assert rows[0]["eval_done_rate"] == ""            # no eval before iter 2
+    assert rows[1]["eval_done_rate"] != ""            # eval from iter 3 lands in the iter-4 row
+    assert "collision_rate" in rows[0]
+
+
+def test_expert_bugs_are_not_swallowed(monkeypatch):
+    from skyhand.env.core import SkyEnv
+    from skyhand.train.train import try_expert
+
+    def broken(self):
+        raise AttributeError("typo in expert")
+    monkeypatch.setattr(SkyEnv, "expert_action", broken)
+    env = make_env("trash", 1, lidar=False)
+    with pytest.raises(AttributeError):
+        try_expert(env)

@@ -33,7 +33,7 @@ from .config import Config, tiny_config
 from .nets import sphere
 from .zsample import WorldZ
 
-EXPERT_ERRORS = (NotImplementedError, AttributeError, ImportError)
+EXPERT_ERRORS = (NotImplementedError,)      # "no expert for this env"; real bugs propagate
 
 
 def scene_list(scene: str) -> List[str]:
@@ -99,8 +99,11 @@ class Trainer:
             json.dump(cfg.to_dict(), f, indent=2)
         self._csv_path = os.path.join(cfg.out, "metrics.csv")
         self._csv_fields: Optional[List[str]] = None
-        self._acc: Dict[str, float] = {}
+        self._acc: Dict[str, float] = {}       # learner metrics summed since the last log
         self._acc_n = 0
+        self._env_acc: Dict[str, float] = {}   # env rates summed since the last log
+        self._env_n = 0
+        self._pending_eval: Dict[str, float] = {}   # eval metrics waiting for the next log row
         self._t0 = time.time()
 
     # -------------------------------------------------- data collection
@@ -120,6 +123,7 @@ class Trainer:
             ex = try_expert(env)
             if ex is None:
                 self.expert_ok = False
+                print("[train] env.expert_action() unavailable: policy actions only", flush=True)
             else:
                 act = torch.where(use.view(n, 1, 1), ex.to(env.device).float(), act)
                 expert = use
@@ -187,44 +191,11 @@ class Trainer:
         return added
 
     # -------------------------------------------------- evaluation
-    @torch.no_grad()
     def evaluate(self, steps: Optional[int] = None) -> Dict[str, float]:
         """Run evaluation rollouts on clean/configured eval environments."""
-        cfg = self.cfg
-        steps = steps or cfg.eval_steps
-        scenes = scene_list(cfg.scene)
-        tot_col, tot_sh, tot_done, count = 0.0, 0.0, 0.0, 0
         if not hasattr(self, "eval_envs"):
             self.eval_envs = {}
-        for i, sc in enumerate(scenes):
-            if sc not in self.eval_envs:
-                self.eval_envs[sc] = make_env(
-                    sc, cfg.eval_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar,
-                    seed=cfg.seed + 500 + i,
-                    domain_rand=cfg.eval_domain_rand,
-                    rand_drone_dynamics=cfg.eval_rand_drone_dynamics,
-                    enable_wind=cfg.eval_enable_wind,
-                    dynamic_wind=cfg.eval_dynamic_wind,
-                    enable_gusts=cfg.eval_enable_gusts,
-                )
-            env = self.eval_envs[sc]
-            obs = env.reset()
-            # Fixed unit test z or uniform sphere
-            z = sphere(torch.randn(cfg.eval_envs, self.agent.d, device=self.device))
-            for _ in range(steps):
-                act = self.agent.act(obs, z, noise=0.0).to(env.device)
-                out = env.step(act)
-                reset = out.done | out.truncated
-                obs = env.reset(torch.nonzero(reset).squeeze(-1)) if reset.any() else out.obs
-                tot_col += out.events["collision"].float().mean().item()
-                tot_sh += out.events["shield"].float().mean().item()
-                tot_done += out.done.float().mean().item()
-                count += 1
-        return {
-            "eval_collision_rate": tot_col / max(count, 1),
-            "eval_shield_rate": tot_sh / max(count, 1),
-            "eval_done_rate": tot_done / max(count, 1),
-        }
+        return evaluate(self.agent, self.cfg, steps, self.eval_envs)
 
     # -------------------------------------------------- learning
     def learn(self) -> Optional[Dict[str, float]]:
@@ -241,20 +212,25 @@ class Trainer:
         return acc
 
     # -------------------------------------------------- logging / checkpoints
-    def _log(self, extra: Dict[str, float]) -> None:
+    def _log(self) -> None:
+        """One metrics row: env rates averaged over the window, learner losses averaged over
+        the updates in it, and any eval metrics produced since the last row."""
         row = {"iter": self.iter, "env_steps": self.env_steps, "updates": self.agent.learner.num_updates,
                "buffer": len(self.buffer), "demo_segs": len(self.demo),
                "sps": round(self.env_steps / max(time.time() - self._t0, 1e-6), 1)}
+        if self._env_n:
+            row.update({k: v / self._env_n for k, v in self._env_acc.items()})
         if self._acc_n:
             row.update({k: v / self._acc_n for k, v in self._acc.items()})
-        row.update(extra)
+        row.update(self._pending_eval)
         if self._csv_fields is None:
             self._csv_fields = list(row.keys())
             with open(self._csv_path, "w", newline="") as f:
                 csv.DictWriter(f, self._csv_fields).writeheader()
-        elif any(k not in self._csv_fields for k in row) and self._acc_n:
-            # first log after learning starts adds loss columns: rewrite header
-            old = list(csv.DictReader(open(self._csv_path)))
+        elif any(k not in self._csv_fields for k in row):
+            # new columns (first losses, first eval): rewrite the header, keep old rows
+            with open(self._csv_path, newline="") as f:
+                old = list(csv.DictReader(f))
             self._csv_fields += [k for k in row if k not in self._csv_fields]
             with open(self._csv_path, "w", newline="") as f:
                 w = csv.DictWriter(f, self._csv_fields)
@@ -265,6 +241,8 @@ class Trainer:
         print("[train] " + " ".join(f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
                                     for k, v in row.items()), flush=True)
         self._acc, self._acc_n = {}, 0
+        self._env_acc, self._env_n = {}, 0
+        self._pending_eval = {}
 
     @torch.no_grad()
     def g_pool(self) -> Optional[torch.Tensor]:
@@ -293,11 +271,12 @@ class Trainer:
                 self.env_step(st, warm=True)
         print(f"[train] warm start done: buffer={len(self.buffer)} demo_segs={len(self.demo)} "
               f"expert={'yes' if self.expert_ok else 'no'}", flush=True)
-        ev: Dict[str, float] = {}
         for it in range(1, cfg.steps + 1):
             self.iter = it
             st = self.streams[(it - 1) % len(self.streams)]
-            ev = self.env_step(st, warm=False)
+            for k, v in self.env_step(st, warm=False).items():
+                self._env_acc[k] = self._env_acc.get(k, 0.0) + v
+            self._env_n += 1
             m = self.learn()
             if m:
                 for k, v in m.items():
@@ -306,13 +285,59 @@ class Trainer:
             if cfg.demo_every and it % cfg.demo_every == 0:
                 self.collect_demos()
             if cfg.eval_every and it % cfg.eval_every == 0:
-                eval_metrics = self.evaluate()
-                ev.update(eval_metrics)
+                self._pending_eval.update(self.evaluate())
             if cfg.log_every and it % cfg.log_every == 0:
-                self._log(ev)
+                self._log()
             if cfg.save_every and it % cfg.save_every == 0:
                 self.save()
         return self.save()
+
+
+# ============================================================ evaluation
+@torch.no_grad()
+def evaluate(agent: Agent, cfg: Config, steps: Optional[int] = None,
+             envs: Optional[Dict[str, object]] = None) -> Dict[str, float]:
+    """Evaluation rollouts of `agent` with a fixed random z per world; envs caches
+    the eval envs across calls (dict scene -> env). Needs no Trainer or replay buffer."""
+    steps = steps or cfg.eval_steps
+    envs = {} if envs is None else envs
+    tot_col, tot_sh, tot_done, count = 0.0, 0.0, 0.0, 0
+    for i, sc in enumerate(scene_list(cfg.scene)):
+        if sc not in envs:
+            envs[sc] = make_env(sc, cfg.eval_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar,
+                                seed=cfg.seed + 500 + i, domain_rand=cfg.eval_domain_rand,
+                                rand_drone_dynamics=cfg.eval_rand_drone_dynamics,
+                                enable_wind=cfg.eval_enable_wind, dynamic_wind=cfg.eval_dynamic_wind,
+                                enable_gusts=cfg.eval_enable_gusts)
+        env = envs[sc]
+        obs = env.reset()
+        z = sphere(torch.randn(cfg.eval_envs, agent.d, device=agent.device))
+        for _ in range(steps):
+            act = agent.act(obs, z, noise=0.0).to(env.device)
+            out = env.step(act)
+            reset = out.done | out.truncated
+            obs = env.reset(torch.nonzero(reset).squeeze(-1)) if reset.any() else out.obs
+            tot_col += out.events["collision"].float().mean().item()
+            tot_sh += out.events["shield"].float().mean().item()
+            tot_done += out.done.float().mean().item()
+            count += 1
+    return {"eval_collision_rate": tot_col / max(count, 1),
+            "eval_shield_rate": tot_sh / max(count, 1),
+            "eval_done_rate": tot_done / max(count, 1)}
+
+
+EVAL_FIELDS = ("eval_envs", "eval_steps", "eval_domain_rand", "eval_rand_drone_dynamics",
+               "eval_enable_wind", "eval_dynamic_wind", "eval_enable_gusts", "backend", "device", "seed")
+
+
+def eval_checkpoint(path: str, cli: Config) -> Dict[str, float]:
+    """Evaluate a saved agent: scene, lidar and networks come from the checkpoint's config,
+    the eval_* settings, backend, device and seed from the command line."""
+    agent = Agent.load(path, device=cli.device)
+    cfg = Config.from_dict(agent.cfg.to_dict())
+    for k in EVAL_FIELDS:
+        setattr(cfg, k, getattr(cli, k))
+    return evaluate(agent, cfg)
 
 
 # ============================================================ CLI
@@ -327,7 +352,8 @@ def _coerce(field: dataclasses.Field, s: str):
     return s
 
 
-def parse_args(argv: Optional[List[str]] = None) -> Config:
+def parse_args(argv: Optional[List[str]] = None, with_eval: bool = False):
+    """Config from the command line; with with_eval=True returns (Config, --eval path or None)."""
     p = argparse.ArgumentParser(prog="python -m skyhand.train.train", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--scene", choices=list(spec.SCENES) + ["all", "both"], default="trash",
@@ -410,23 +436,14 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
     if cfg.device == "cuda" and not torch.cuda.is_available():
         print("[train] CUDA not available, using cpu", file=sys.stderr)
         cfg.device = "cpu"
-    return cfg
+    return (cfg, a.eval) if with_eval else cfg
 
 
 def main(argv: Optional[List[str]] = None) -> str:
-    # Check if a standalone --eval flag was provided
-    raw_args = list(sys.argv[1:] if argv is None else argv)
-    eval_ckpt = None
-    if "--eval" in raw_args:
-        idx = raw_args.index("--eval")
-        if idx + 1 < len(raw_args):
-            eval_ckpt = raw_args[idx + 1]
-    cfg = parse_args(argv)
+    cfg, eval_ckpt = parse_args(argv, with_eval=True)
     if eval_ckpt is not None:
         print(f"[eval] evaluating checkpoint: {eval_ckpt}", flush=True)
-        trainer = Trainer(cfg)
-        trainer.agent = Agent.load(eval_ckpt, device=cfg.device)
-        metrics = trainer.evaluate()
+        metrics = eval_checkpoint(eval_ckpt, cfg)
         print("[eval] " + " ".join(f"{k}={v:.4g}" for k, v in metrics.items()), flush=True)
         return eval_ckpt
     print(f"[train] method={cfg.method} scene={cfg.scene} backend={cfg.backend} envs={cfg.num_envs} "
