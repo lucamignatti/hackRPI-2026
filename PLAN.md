@@ -365,13 +365,9 @@ scripts/
 PLAN.md
 ```
 
-## 11. Team roles (three people)
+## 11. Work areas
 
-| Person | Owns |
-|---|---|
-| A | Training runs: desktop runs, FB vs SF checkpoint decision, evaluation numbers |
-| B | Environments: tuning both scenes, expert success rates, Genesis backend and sim-to-sim checks |
-| C | Mission layer and judge demo: Gemini key and prompts, z inference on real checkpoints, demo polish, Devpost |
+The work is split into independent areas (training, environments, mission layer, judge demo, submission), each with folders, tasks, and a definition of done. See "Work areas" in README.md. The team assigns them.
 
 The interfaces are fixed in skyhand/spec.py; change them only together, since every module and test depends on it.
 
