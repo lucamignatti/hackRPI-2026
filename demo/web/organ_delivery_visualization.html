@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - Delicate Organ Transport & Jerk Constraint</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-red-500 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Medical — Delicate Organ Transport & Jerk Constraint</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Simulating <code class="text-rose-400 font-mono">skyhand/env/core.py</code>: insulated cooler payload, strict jerk limit (&lt;500 m/s³), tilt limits (&lt;34°), and gentle helipad touchdown.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnMode" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-sm">
+          ✈️ Mode: Smooth Medical Flight
+        </button>
+        <button id="btnGust" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition-all shadow-sm">
+          💨 Crosswind Turbulence
+        </button>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Randomize Route
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#090d16] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Mission Stage Banner -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1.5 text-xs bg-black/80 backdrop-blur p-3 rounded-lg border border-rose-900/40">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-white">MEDICAL MISSION:</span>
+          <span id="phasePill" class="px-2 py-0.5 rounded text-[12px] font-semibold font-mono bg-rose-950 text-rose-300 border border-rose-600/40">
+            Phase 1: Gentle Liftoff
+          </span>
+        </div>
+        <div id="phaseDesc" class="text-xs text-rose-100/90 max-w-xs">
+          Vertical liftoff with jerk &lt; 200 m/s³ to protect organ donor tissue.
+        </div>
+      </div>
+
+      <!-- Critical Organ Viability & Flight HUD -->
+      <div class="absolute top-3 right-3 flex flex-col gap-1.5 bg-black/80 backdrop-blur p-3 rounded-lg text-xs border border-rose-900/40 min-w-[220px]">
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Organ Viability:</span>
+          <span id="gaugeViability" class="font-mono font-bold text-emerald-400 text-sm">100.0%</span>
+        </div>
+        <div class="w-full bg-zinc-800 h-2 rounded-full overflow-hidden mt-0.5">
+          <div id="viabilityBar" class="bg-emerald-400 h-full w-full transition-all duration-150"></div>
+        </div>
+
+        <div class="flex justify-between items-center mt-1">
+          <span class="text-[var(--muted-foreground)]">Jerk (Acceleration Shock):</span>
+          <span id="gaugeJerk" class="font-mono font-bold text-cyan-300">42 m/s³</span>
+        </div>
+        <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden">
+          <div id="jerkBar" class="bg-cyan-400 h-full w-0 transition-all duration-100"></div>
+        </div>
+
+        <div class="flex justify-between items-center mt-1">
+          <span class="text-[var(--muted-foreground)]">Airframe Tilt Angle:</span>
+          <span id="gaugeTilt" class="font-mono text-cyan-300">3.2° (Max 34.4°)</span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Cooler Temp:</span>
+          <span class="font-mono text-cyan-200 font-semibold">3.8°C (Optimal)</span>
+        </div>
+      </div>
+
+      <!-- Controls Hint -->
+      <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-rose-300 border border-rose-700/40">
+        <span>🎥 Rotate: <span class="text-white">Click & Drag</span> | Zoom: <span class="text-white">Mouse Wheel</span></span>
+      </div>
+
+      <!-- Legend -->
+      <div class="absolute bottom-3 right-3 flex items-center gap-2.5 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs border border-zinc-700">
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-rose-500"></span> Organ Cooler</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-emerald-400"></span> Helipad</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-indigo-500"></span> Hospital Carts</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> Dual LiDAR Rays</span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">Medical Drone State</div>
+        <div id="statDronePos" class="font-mono text-cyan-300 font-semibold text-sm">Alt: 2.8m (Cruise)</div>
+        <div id="statSpeed" class="text-xs text-cyan-500/80">Speed: 2.4 m/s</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Organ Container (Cooler)</div>
+        <div id="statCoolerPos" class="font-mono text-rose-400 font-semibold text-sm">Grip: SECURE (100%)</div>
+        <div id="statGForces" class="text-xs text-[var(--muted-foreground)]">G-load: 1.02G (Stable)</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Hospital Helipad Target</div>
+        <div id="statHelipadDist" class="font-mono text-emerald-400 font-semibold text-sm">Dist: 14.2m</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Descent velocity limit: &lt;0.4 m/s</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Obstacle Avoidance</div>
+        <div id="statLiDAR" class="font-mono text-cyan-300 font-semibold text-sm">Clearance: 4.8m</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Barrier certificate: nominal</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const ARENA_HALF = 15.0;
+    const DT = 0.035;
+
+    class OrganDeliverySim {
+      constructor() {
+        this.time = 0.0;
+        this.phase = 0; // 0: secure, 1: liftoff, 2: cruise, 3: approach helipad, 4: touchdown, 5: delivered
+        this.smoothMode = true;
+        this.organViability = 100.0;
+        this.jerk = 20.0; // m/s^3
+        this.wind = { x: 0, y: 0 };
+        this.gustTimer = 0;
+        this.reset();
+      }
+
+      reset() {
+        this.time = 0.0;
+        this.phase = 0;
+        this.organViability = 100.0;
+        this.jerk = 15.0;
+        this.wind = { x: 0, y: 0 };
+        this.gustTimer = 0;
+
+        // Medical Drone
+        this.drone = {
+          x: -10.0 + (Math.random() - 0.5) * 3.0,
+          y: -8.0 + (Math.random() - 0.5) * 3.0,
+          z: 0.35,
+          vx: 0, vy: 0, vz: 0,
+          ax: 0, ay: 0, az: 0,
+          prevAx: 0, prevAy: 0, prevAz: 0,
+          tilt: 0.0,
+          tiltAngle: 0.0,
+          holding: true
+        };
+
+        // Organ Cooler Payload
+        this.cooler = {
+          x: this.drone.x,
+          y: this.drone.y,
+          z: 0.15,
+          sizeX: 0.45, sizeY: 0.35, sizeZ: 0.30,
+          temp: 3.8
+        };
+
+        // Hospital Receiving Helipad
+        this.helipad = {
+          x: 9.0 + (Math.random() - 0.5) * 4.0,
+          y: 8.0 + (Math.random() - 0.5) * 4.0,
+          z: 0.1,
+          radius: 1.8
+        };
+
+        // Obstacles (Hospital carts & structures)
+        this.obstacles = [
+          { x: 0, y: 0, z: 1.0, sizeX: 2.0, sizeY: 2.0, sizeZ: 2.0, moving: false },
+          { x: -3.0, y: 4.0, z: 0.8, sizeX: 1.5, sizeY: 1.5, sizeZ: 1.6, moving: false },
+          {
+            orbitX: 3.0, orbitY: -2.0, radius: 4.0, speed: 0.6, angle: 0,
+            x: 3, y: -2, z: 0.7, sizeX: 1.4, sizeY: 1.4, sizeZ: 1.4, moving: true
+          }
+        ];
+      }
+
+      triggerTurbulence() {
+        this.gustTimer = 3.5;
+        this.wind.x = (Math.random() > 0.5 ? 1 : -1) * (2.8 + Math.random() * 2.0);
+        this.wind.y = (Math.random() > 0.5 ? 1 : -1) * (2.8 + Math.random() * 2.0);
+      }
+
+      toggleFlightMode() {
+        this.smoothMode = !this.smoothMode;
+        document.getElementById("btnMode").innerText = this.smoothMode ? "✈️ Mode: Smooth Medical Flight" : "⚡ Mode: Aggressive Fast Transit";
+        document.getElementById("btnMode").className = this.smoothMode 
+          ? "px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-all shadow-sm"
+          : "px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition-all shadow-sm";
+      }
+
+      step() {
+        this.time += DT;
+
+        // Turbulence decay
+        if (this.gustTimer > 0) {
+          this.gustTimer -= DT;
+          if (this.gustTimer <= 0) {
+            this.wind.x = 0; this.wind.y = 0;
+          }
+        }
+
+        // Update Moving Hospital Carts
+        for (const obs of this.obstacles) {
+          if (obs.moving) {
+            obs.angle += obs.speed * DT;
+            obs.x = obs.orbitX + Math.cos(obs.angle) * obs.radius;
+            obs.y = obs.orbitY + Math.sin(obs.angle) * obs.radius;
+          }
+        }
+
+        // Mission Waypoints
+        let targetX = this.drone.x;
+        let targetY = this.drone.y;
+        let targetZ = this.drone.z;
+
+        // Phase 0: Pre-flight lock
+        if (this.phase === 0) {
+          targetZ = 0.35;
+          if (this.time > 1.0) this.phase = 1;
+        }
+        // Phase 1: Smooth Vertical Liftoff
+        else if (this.phase === 1) {
+          targetZ = 2.8;
+          if (this.drone.z > 2.5) this.phase = 2; // Cruise
+        }
+        // Phase 2: Gentle Cruise to Hospital
+        else if (this.phase === 2) {
+          targetX = this.helipad.x;
+          targetY = this.helipad.y;
+          targetZ = 2.8;
+          const distHelipad = Math.hypot(this.drone.x - this.helipad.x, this.drone.y - this.helipad.y);
+          if (distHelipad < 1.0) {
+            this.phase = 3; // Approach
+          }
+        }
+        // Phase 3: Precision Hover over Helipad
+        else if (this.phase === 3) {
+          targetX = this.helipad.x;
+          targetY = this.helipad.y;
+          targetZ = 1.2;
+          if (this.drone.z < 1.4 && Math.abs(this.drone.vz) < 0.4) {
+            this.phase = 4; // Touchdown
+          }
+        }
+        // Phase 4: Gentle Touchdown
+        else if (this.phase === 4) {
+          targetX = this.helipad.x;
+          targetY = this.helipad.y;
+          targetZ = 0.35;
+          if (this.drone.z <= 0.38) {
+            this.drone.holding = false;
+            this.phase = 5; // Delivered!
+          }
+        }
+        // Phase 5: Delivered
+        else if (this.phase === 5) {
+          targetZ = 2.5; // Drone ascends away
+        }
+
+        // Obstacle avoidance barrier push
+        for (const obs of this.obstacles) {
+          const dx = this.drone.x - obs.x;
+          const dy = this.drone.y - obs.y;
+          const d = Math.hypot(dx, dy);
+          const safeR = obs.sizeX * 0.75 + 0.8;
+          if (d < safeR && this.drone.z < obs.z + obs.sizeZ) {
+            const push = (safeR - d) * 3.5;
+            targetX += (dx / (d || 1)) * push;
+            targetY += (dy / (d || 1)) * push;
+          }
+        }
+
+        // Medical Controller (P-controller with Jerk Filter)
+        const pGain = this.smoothMode ? 1.6 : 3.5;
+        const maxSpd = this.smoothMode ? 2.8 : 5.5;
+
+        let desVx = (targetX - this.drone.x) * pGain + this.wind.x * 0.3;
+        let desVy = (targetY - this.drone.y) * pGain + this.wind.y * 0.3;
+        let desVz = (targetZ - this.drone.z) * (this.smoothMode ? 1.4 : 2.5);
+
+        const spdXY = Math.hypot(desVx, desVy);
+        if (spdXY > maxSpd) {
+          desVx = (desVx / spdXY) * maxSpd;
+          desVy = (desVy / spdXY) * maxSpd;
+        }
+
+        // Acceleration and Jerk calculation
+        const alpha = this.smoothMode ? 0.08 : 0.25;
+        const newVx = this.drone.vx + (desVx - this.drone.vx) * alpha;
+        const newVy = this.drone.vy + (desVy - this.drone.vy) * alpha;
+        const newVz = this.drone.vz + (desVz - this.drone.vz) * alpha;
+
+        this.drone.prevAx = this.drone.ax;
+        this.drone.prevAy = this.drone.ay;
+        this.drone.prevAz = this.drone.az;
+
+        this.drone.ax = (newVx - this.drone.vx) / DT;
+        this.drone.ay = (newVy - this.drone.vy) / DT;
+        this.drone.az = (newVz - this.drone.vz) / DT;
+
+        // Jerk = derivative of acceleration (m/s^3)
+        const jerkX = (this.drone.ax - this.drone.prevAx) / DT;
+        const jerkY = (this.drone.ay - this.drone.prevAy) / DT;
+        const jerkZ = (this.drone.az - this.drone.prevAz) / DT;
+        this.jerk = Math.hypot(jerkX, jerkY, jerkZ);
+
+        this.drone.vx = newVx;
+        this.drone.vy = newVy;
+        this.drone.vz = newVz;
+
+        this.drone.x += this.drone.vx * DT;
+        this.drone.y += this.drone.vy * DT;
+        this.drone.z += this.drone.vz * DT;
+
+        // Airframe Tilt
+        const tiltRad = Math.hypot(this.drone.vx, this.drone.vy) * 0.08;
+        this.drone.tiltAngle = tiltRad * 180 / Math.PI;
+
+        // Organ Viability degradation if high jerk or excessive tilt (>20 deg)
+        if (this.drone.holding) {
+          if (this.jerk > 300) {
+            this.organViability = Math.max(0, this.organViability - (this.jerk - 300) * 0.005);
+          }
+          if (this.drone.tiltAngle > 20) {
+            this.organViability = Math.max(0, this.organViability - (this.drone.tiltAngle - 20) * 0.08);
+          }
+          // Cooler rides under drone
+          this.cooler.x = this.drone.x;
+          this.cooler.y = this.drone.y;
+          this.cooler.z = this.drone.z - 0.22;
+        } else {
+          // Resting on helipad
+          this.cooler.z = 0.15;
+        }
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 3D Rendering & Dual LiDAR Pattern
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+    const sim = new OrganDeliverySim();
+
+    let camYaw = -0.75;
+    let camPitch = 0.45;
+    let camDist = 32.0;
+    const targetLook = { x: 0, y: 0, z: 1.0 };
+
+    function project3D(x, y, z) {
+      const rx = x - targetLook.x;
+      const ry = y - targetLook.y;
+      const rz = z - targetLook.z;
+
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null;
+
+      const fov = 750;
+      return {
+        x: canvas.width / 2 + (x2 / camZ) * fov,
+        y: canvas.height / 2 - (z2 / camZ) * fov,
+        depth: camZ
+      };
+    }
+
+    // Camera Interaction
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      isDragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      camYaw += (e.clientX - lastX) * 0.008;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + (e.clientY - lastY) * 0.008));
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { isDragging = false; });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      camDist = Math.max(12.0, Math.min(65.0, camDist + e.deltaY * 0.04));
+    }, { passive: false });
+
+    // UI Buttons
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnGust").addEventListener("click", () => { sim.triggerTurbulence(); });
+    document.getElementById("btnMode").addEventListener("click", () => { sim.toggleFlightMode(); });
+
+    const phaseNames = [
+      { name: "Phase 0: Launch Pad Lock", desc: "Digital verification of organ cooler latch and thermal seal." },
+      { name: "Phase 1: Gentle Vertical Liftoff", desc: "Climbing smoothly with jerk < 200 m/s³ to protect delicate tissue." },
+      { name: "Phase 2: Stable Medical Transit", desc: "Formation flight along LiDAR-cleared corridor to the hospital." },
+      { name: "Phase 3: Helipad Approach & Hover", desc: "Deceleration and centering above the hospital emergency receiving pad." },
+      { name: "Phase 4: Delicate Touchdown", desc: "Soft landing at vz < 0.3 m/s to prevent shock impact." },
+      { name: "Phase 5: Medical Delivery Complete", desc: "Organ container secured on hospital receiving pad. Ready for surgery!" }
+    ];
+
+    // -------------------------------------------------------------
+    // Render Loop
+    // -------------------------------------------------------------
+    function render3D() {
+      sim.step();
+
+      // Telemetry Update
+      const pInfo = phaseNames[sim.phase] || phaseNames[0];
+      document.getElementById("phasePill").innerText = pInfo.name;
+      document.getElementById("phaseDesc").innerText = pInfo.desc;
+
+      const viab = sim.organViability.toFixed(1);
+      document.getElementById("gaugeViability").innerText = `${viab}%`;
+      document.getElementById("viabilityBar").style.width = `${viab}%`;
+      document.getElementById("viabilityBar").className = sim.organViability > 80 ? "bg-emerald-400 h-full transition-all" : (sim.organViability > 50 ? "bg-amber-400 h-full transition-all" : "bg-red-500 h-full transition-all");
+
+      const jerkVal = Math.min(500, sim.jerk).toFixed(0);
+      document.getElementById("gaugeJerk").innerText = `${jerkVal} m/s³`;
+      document.getElementById("jerkBar").style.width = `${Math.min(100, sim.jerk / 3)}%`;
+      document.getElementById("jerkBar").className = sim.jerk > 300 ? "bg-red-500 h-full transition-all" : (sim.jerk > 150 ? "bg-amber-400 h-full transition-all" : "bg-cyan-400 h-full transition-all");
+
+      document.getElementById("gaugeTilt").innerText = `${sim.drone.tiltAngle.toFixed(1)}° (Max 34.4°)`;
+
+      document.getElementById("statDronePos").innerText = `Alt: ${sim.drone.z.toFixed(2)}m (Z)`;
+      document.getElementById("statSpeed").innerText = `Speed: ${Math.hypot(sim.drone.vx, sim.drone.vy).toFixed(2)} m/s`;
+
+      const distHelipad = Math.hypot(sim.drone.x - sim.helipad.x, sim.drone.y - sim.helipad.y).toFixed(1);
+      document.getElementById("statHelipadDist").innerText = `Dist: ${distHelipad}m`;
+
+      // Clear Canvas
+      ctx.fillStyle = "#090d16";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Hospital Helipad Rooftop Grid
+      ctx.strokeStyle = "rgba(45, 60, 90, 0.4)";
+      ctx.lineWidth = 1;
+      const gridSpan = 15;
+      for (let g = -gridSpan; g <= gridSpan; g += 3) {
+        const p1 = project3D(g, -gridSpan, 0);
+        const p2 = project3D(g, gridSpan, 0);
+        if (p1 && p2) {
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        }
+        const q1 = project3D(-gridSpan, g, 0);
+        const q2 = project3D(gridSpan, g, 0);
+        if (q1 && q2) {
+          ctx.beginPath(); ctx.moveTo(q1.x, q1.y); ctx.lineTo(q2.x, q2.y); ctx.stroke();
+        }
+      }
+
+      // Hospital Emergency Receiving Helipad
+      const heliP = project3D(sim.helipad.x, sim.helipad.y, 0.05);
+      if (heliP) {
+        const rScreen = (sim.helipad.radius / heliP.depth) * 750;
+        // Outer Pad
+        ctx.fillStyle = "#064e3b";
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(heliP.x, heliP.y, rScreen, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        // White "H" Emblem
+        ctx.fillStyle = "#ffffff";
+        ctx.font = `bold ${Math.round(rScreen * 0.9)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("H", heliP.x, heliP.y);
+
+        ctx.fillStyle = "#34d399";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("HOSPITAL EMERGENCY PAD", heliP.x, heliP.y + rScreen + 16);
+      }
+
+      // Obstacles
+      for (const obs of sim.obstacles) {
+        const pBase = project3D(obs.x, obs.y, 0);
+        const pTop = project3D(obs.x, obs.y, obs.sizeZ);
+        if (pBase && pTop) {
+          const w = (obs.sizeX / pBase.depth) * 750;
+          const h = pBase.y - pTop.y;
+          ctx.fillStyle = obs.moving ? "rgba(99, 102, 241, 0.75)" : "rgba(51, 65, 85, 0.85)";
+          ctx.strokeStyle = obs.moving ? "#818cf8" : "#64748b";
+          ctx.lineWidth = 2;
+          ctx.fillRect(pBase.x - w / 2, pTop.y, w, h);
+          ctx.strokeRect(pBase.x - w / 2, pTop.y, w, h);
+        }
+      }
+
+      // Dual LiDAR Scanners Sweeps (NIR grey and Green bathymetric rays)
+      const dP = project3D(sim.drone.x, sim.drone.y, sim.drone.z);
+      if (dP) {
+        const numRays = 16;
+        for (let r = 0; r < numRays; r++) {
+          const rayAngle = (r / numRays) * Math.PI * 2 + sim.time * 2.0;
+          const rayDist = 6.0;
+          const rx = sim.drone.x + Math.cos(rayAngle) * rayDist;
+          const ry = sim.drone.y + Math.sin(rayAngle) * rayDist;
+          const rz = sim.drone.z - 1.2;
+          const rP = project3D(rx, ry, rz);
+          if (rP) {
+            ctx.strokeStyle = r % 2 === 0 ? "rgba(57, 255, 106, 0.22)" : "rgba(154, 163, 173, 0.25)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(dP.x, dP.y);
+            ctx.lineTo(rP.x, rP.y);
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Organ Cooler Container (White insulated box with Red Cross)
+      const cP = project3D(sim.cooler.x, sim.cooler.y, sim.cooler.z);
+      if (cP) {
+        const sz = (0.35 / cP.depth) * 750;
+        ctx.fillStyle = "#f8fafc";
+        ctx.strokeStyle = "#ef4444";
+        ctx.lineWidth = 2;
+        ctx.fillRect(cP.x - sz / 2, cP.y - sz / 2, sz, sz);
+        ctx.strokeRect(cP.x - sz / 2, cP.y - sz / 2, sz, sz);
+
+        // Red Cross Symbol
+        ctx.fillStyle = "#ef4444";
+        const cCross = sz * 0.28;
+        ctx.fillRect(cP.x - cCross / 2, cP.y - sz * 0.35, cCross, sz * 0.7);
+        ctx.fillRect(cP.x - sz * 0.35, cP.y - cCross / 2, sz * 0.7, cCross);
+
+        ctx.fillStyle = "#fca5a5";
+        ctx.font = "bold 11px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("ORGAN COOLER", cP.x, cP.y + sz + 10);
+      }
+
+      // Drone
+      if (dP) {
+        // Shadow
+        const dShadow = project3D(sim.drone.x, sim.drone.y, 0.05);
+        if (dShadow) {
+          ctx.fillStyle = "rgba(0,0,0,0.4)";
+          ctx.beginPath();
+          ctx.ellipse(dShadow.x, dShadow.y, 14, 7, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const sz = (0.42 / dP.depth) * 750;
+
+        // Medical Drone White Chassis
+        ctx.strokeStyle = "#cbd5e1";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(dP.x - sz, dP.y - sz * 0.5); ctx.lineTo(dP.x + sz, dP.y + sz * 0.5);
+        ctx.moveTo(dP.x - sz, dP.y + sz * 0.5); ctx.lineTo(dP.x + sz, dP.y - sz * 0.5);
+        ctx.stroke();
+
+        // 4 Rotors
+        const rotorR = sz * 0.55;
+        const rotorOffsets = [
+          [-sz, -sz * 0.5], [sz, sz * 0.5],
+          [-sz, sz * 0.5], [sz, -sz * 0.5]
+        ];
+        ctx.fillStyle = "rgba(244, 63, 94, 0.5)";
+        ctx.strokeStyle = "#f43f5e";
+        ctx.lineWidth = 1;
+        for (const [ox, oy] of rotorOffsets) {
+          ctx.beginPath();
+          ctx.ellipse(dP.x + ox, dP.y + oy, rotorR, rotorR * 0.4, sim.time * 28, 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+        }
+
+        // Center Medical Pod
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#e11d48";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(dP.x, dP.y, sz * 0.5, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        ctx.fillStyle = "#ffffff";
+        ctx.font = "bold 12px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("MED-DRONE 01", dP.x, dP.y - sz - 10);
+      }
+
+      requestAnimationFrame(render3D);
+    }
+
+    render3D();
+  </script>
+</body>
+</html>

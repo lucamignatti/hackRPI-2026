@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - 3D Ocean & Fish Simulation</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-cyan-400 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand 3D Environment — Full Perspective Fish & Wave Simulator</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          True 3D coordinates $(x, y, z)$ from <code class="text-cyan-400 font-mono">skyhand/env/fish.py</code>: 3D Boids flocking, undulating 3D Gerstner waves, and aerial predator evasion.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Randomize 3D Reset
+        </button>
+        <button id="btnDroneMode" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-all">
+          🚁 Autopilot: Orbiting
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#040e1a] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Overlaid 3D Viewport Controls & Indicators -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1 text-[12px] bg-black/60 backdrop-blur px-3 py-2 rounded-lg text-cyan-200 border border-cyan-800/40">
+        <div class="font-semibold text-white flex items-center gap-1.5">
+          <span>🎥 3D Orbit Camera</span>
+          <span class="text-[10px] text-cyan-400 font-normal">(Click & drag to rotate | Scroll to zoom)</span>
+        </div>
+        <div class="text-cyan-300/80 text-[11px] font-mono">
+          Arena: 30m × 30m × 6m | Surface: z = 0m | Seabed: z = -3.5m
+        </div>
+      </div>
+
+      <div class="absolute top-3 right-3 flex flex-col gap-1.5 bg-black/60 backdrop-blur p-2.5 rounded-lg text-[12px] border border-cyan-800/40">
+        <span class="font-semibold text-white">Camera Presets:</span>
+        <div class="flex gap-1.5">
+          <button id="camIso" class="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-200 text-xs">Isometric</button>
+          <button id="camSide" class="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-200 text-xs">Side Waterline</button>
+          <button id="camTop" class="px-2 py-0.5 rounded bg-cyan-950 hover:bg-cyan-900 border border-cyan-700 text-cyan-200 text-xs">Top Overhead</button>
+        </div>
+      </div>
+
+      <div class="absolute bottom-3 right-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-[12px] text-amber-300 border border-amber-600/30">
+        <span>Drone Controls: <kbd class="px-1 py-0.5 bg-zinc-800 rounded font-mono text-white text-[11px]">W/A/S/D</kbd> Horizontal, <kbd class="px-1 py-0.5 bg-zinc-800 rounded font-mono text-white text-[11px]">Q/E</kbd> Altitude</span>
+      </div>
+    </div>
+
+    <!-- Live 3D Telemetry & Environmental Sliders -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">School A (Cyan) 3D Pos</div>
+        <div id="statSchoolA" class="font-mono text-cyan-400 font-semibold text-sm">X: 0.0, Y: 0.0, Z: -1.0m</div>
+        <div class="text-[12px] text-cyan-500/80">16 fish · Cohesion & Heading</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">School B (Green) 3D Pos</div>
+        <div id="statSchoolB" class="font-mono text-emerald-400 font-semibold text-sm">X: 0.0, Y: 0.0, Z: -1.0m</div>
+        <div class="text-[12px] text-emerald-500/80">16 fish · Cohesion & Heading</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone #0 Spatial State</div>
+        <div id="statDrone" class="font-mono text-amber-300 font-semibold text-sm">Z: 1.5m (Hovering)</div>
+        <div id="statScared" class="text-[12px] text-red-400 font-medium">Scared Fish: 0 / 32</div>
+      </div>
+      <div class="flex flex-col gap-1">
+        <div class="flex justify-between items-center text-[var(--muted-foreground)]">
+          <span>Wave Height: <span id="waveVal" class="font-mono text-[var(--foreground)]">0.40m</span></span>
+        </div>
+        <input id="sliderWave" type="range" min="0.05" max="0.80" step="0.05" value="0.40" class="w-full h-1 bg-cyan-950 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+        
+        <div class="flex justify-between items-center text-[var(--muted-foreground)] mt-0.5">
+          <span>Predator Flee: <span id="fleeVal" class="font-mono text-[var(--foreground)]">1.2x</span></span>
+        </div>
+        <input id="sliderFlee" type="range" min="0" max="3" step="0.2" value="1.2" class="w-full h-1 bg-cyan-950 rounded-lg appearance-none cursor-pointer accent-cyan-500">
+
+        <div class="flex justify-between items-center text-[var(--muted-foreground)] mt-0.5">
+          <span>School Clumping: <span id="cohesionVal" class="font-mono text-emerald-400">1.0x</span></span>
+        </div>
+        <input id="sliderCohesion" type="range" min="0.3" max="4.0" step="0.2" value="1.0" class="w-full h-1 bg-cyan-950 rounded-lg appearance-none cursor-pointer accent-emerald-400">
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // Physics Simulation (Exact logic from skyhand/env/fish.py & waves.py)
+    // -------------------------------------------------------------
+    const ARENA_HALF = 15.0;
+    const N_SCHOOLS = 2;
+    const PER_SCHOOL = 16;
+    const TOTAL_FISH = N_SCHOOLS * PER_SCHOOL;
+    const DT = 0.04;
+
+    class Fish3DSim {
+      constructor() {
+        this.fleeGain = 1.2;
+        this.waveAmp = 0.40;
+        this.cohesionGain = 1.0;
+        this.time = 0.0;
+        this.drone = { x: 0, y: 0, z: 1.5, vx: 0, vy: 0, vz: 0, auto: true };
+        this.reset();
+      }
+
+      reset() {
+        this.pos = [];
+        this.vel = [];
+        this.targets = [];
+        this.schoolId = [];
+        this.trails = [];
+
+        for (let s = 0; s < N_SCHOOLS; s++) {
+          const cx = (Math.random() - 0.5) * 2 * (ARENA_HALF - 4);
+          const cy = (Math.random() - 0.5) * 2 * (ARENA_HALF - 4);
+          const cz = -(0.6 + 0.8 * Math.random());
+          this.targets.push({
+            x: (Math.random() - 0.5) * 2 * (ARENA_HALF - 4),
+            y: (Math.random() - 0.5) * 2 * (ARENA_HALF - 4),
+            z: -(0.6 + 0.8 * Math.random())
+          });
+
+          const ang = Math.random() * 2 * Math.PI;
+          const baseVx = Math.cos(ang) * 0.6;
+          const baseVy = Math.sin(ang) * 0.6;
+
+          for (let k = 0; k < PER_SCHOOL; k++) {
+            const jx = (Math.random() - 0.5) * 2.2;
+            const jy = (Math.random() - 0.5) * 2.2;
+            const jz = (Math.random() - 0.5) * 0.4;
+            this.pos.push({ x: cx + jx, y: cy + jy, z: cz + jz });
+            this.vel.push({ x: baseVx + (Math.random() - 0.5) * 0.1, y: baseVy + (Math.random() - 0.5) * 0.1, z: 0 });
+            this.schoolId.push(s);
+            this.trails.push([]);
+          }
+        }
+      }
+
+      getWaveHeight(x, y, t) {
+        // Airy / Gerstner multi-component wave field
+        const w1 = this.waveAmp * 0.50 * Math.sin(0.35 * x + 1.2 * t);
+        const w2 = this.waveAmp * 0.35 * Math.sin(0.28 * y - 0.9 * t + 0.8);
+        const w3 = this.waveAmp * 0.15 * Math.sin(0.25 * (x + y) + 1.4 * t);
+        return w1 + w2 + w3;
+      }
+
+      getSchoolCenters() {
+        const centers = [{ x: 0, y: 0, z: 0, count: 0 }, { x: 0, y: 0, z: 0, count: 0 }];
+        for (let i = 0; i < TOTAL_FISH; i++) {
+          const s = this.schoolId[i];
+          centers[s].x += this.pos[i].x;
+          centers[s].y += this.pos[i].y;
+          centers[s].z += this.pos[i].z;
+          centers[s].count++;
+        }
+        return centers.map(c => ({
+          x: c.x / Math.max(1, c.count),
+          y: c.y / Math.max(1, c.count),
+          z: c.z / Math.max(1, c.count)
+        }));
+      }
+
+      getSchoolMeanVel() {
+        const mvel = [{ x: 0, y: 0, z: 0, count: 0 }, { x: 0, y: 0, z: 0, count: 0 }];
+        for (let i = 0; i < TOTAL_FISH; i++) {
+          const s = this.schoolId[i];
+          mvel[s].x += this.vel[i].x;
+          mvel[s].y += this.vel[i].y;
+          mvel[s].z += this.vel[i].z;
+          mvel[s].count++;
+        }
+        return mvel.map(m => ({
+          x: m.x / Math.max(1, m.count),
+          y: m.y / Math.max(1, m.count),
+          z: m.z / Math.max(1, m.count)
+        }));
+      }
+
+      step() {
+        this.time += DT;
+        const centers = this.getSchoolCenters();
+        const meanVels = this.getSchoolMeanVel();
+
+        // Waypoint check
+        for (let s = 0; s < N_SCHOOLS; s++) {
+          const dx = centers[s].x - this.targets[s].x;
+          const dy = centers[s].y - this.targets[s].y;
+          const dz = centers[s].z - this.targets[s].z;
+          if (Math.hypot(dx, dy, dz) < 2.0) {
+            this.targets[s] = {
+              x: (Math.random() - 0.5) * 2 * (ARENA_HALF - 4),
+              y: (Math.random() - 0.5) * 2 * (ARENA_HALF - 4),
+              z: -(0.6 + 0.8 * Math.random())
+            };
+          }
+        }
+
+        // Drone autonomous patrol
+        if (this.drone.auto) {
+          const orbitR = 8.0;
+          this.drone.x = orbitR * Math.cos(this.time * 0.35);
+          this.drone.y = orbitR * Math.sin(this.time * 0.35 * 0.7);
+          this.drone.z = 1.4 + 0.6 * Math.sin(this.time * 0.8);
+        } else {
+          // Manual velocity integration
+          this.drone.x += this.drone.vx * DT * 6.0;
+          this.drone.y += this.drone.vy * DT * 6.0;
+          this.drone.z += this.drone.vz * DT * 3.0;
+          this.drone.z = Math.max(0.4, Math.min(5.0, this.drone.z));
+        }
+
+        let scaredCount = 0;
+
+        for (let i = 0; i < TOTAL_FISH; i++) {
+          const s = this.schoolId[i];
+          const p = this.pos[i];
+          const v = this.vel[i];
+          const c = centers[s];
+          const mv = meanVels[s];
+          const tgt = this.targets[s];
+
+          // 1. Cohesion (0.6 * cohesionGain) + Alignment (0.5)
+          let ax = (0.6 * this.cohesionGain) * (c.x - p.x) + 0.5 * (mv.x - v.x);
+          let ay = (0.6 * this.cohesionGain) * (c.y - p.y) + 0.5 * (mv.y - v.y);
+          let az = (0.6 * this.cohesionGain) * (c.z - p.z) + 0.5 * (mv.z - v.z);
+
+          // 2. 3D Waypoint seeking
+          const tdx = tgt.x - p.x;
+          const tdy = tgt.y - p.y;
+          const tdz = tgt.z - p.z;
+          const tdist = Math.max(1.0, Math.hypot(tdx, tdy, tdz));
+          ax += 0.12 * (tdx / tdist);
+          ay += 0.12 * (tdy / tdist);
+          az += 0.12 * (tdz / tdist);
+
+          // 3. Separation (0.3)
+          for (let j = 0; j < TOTAL_FISH; j++) {
+            if (i !== j && this.schoolId[j] === s) {
+              const dx = p.x - this.pos[j].x;
+              const dy = p.y - this.pos[j].y;
+              const dz = p.z - this.pos[j].z;
+              const d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 < 0.6 * 0.6 && d2 > 1e-4) {
+                const dist = Math.sqrt(d2);
+                ax += 0.3 * (dx / (dist * dist));
+                ay += 0.3 * (dy / (dist * dist));
+                az += 0.3 * (dz / (dist * dist));
+              }
+            }
+          }
+
+          // 4. Drone Fleeing (Horizontal dist < 2.5m and drone.z < 2.0m)
+          const ddx = p.x - this.drone.x;
+          const ddy = p.y - this.drone.y;
+          const ddist = Math.hypot(ddx, ddy);
+          if (ddist < 2.5 && this.drone.z < 2.0) {
+            scaredCount++;
+            const safeDist = Math.max(0.1, ddist);
+            const fleeForce = (0.8 * this.fleeGain) / (safeDist * safeDist);
+            ax += ddx * fleeForce;
+            ay += ddy * fleeForce;
+          }
+
+          // 5. Wave depth band: [surface - 2.0, surface - 0.3]
+          const surf = this.getWaveHeight(p.x, p.y, this.time);
+          const top = surf - 0.3;
+          const bottom = surf - 2.0;
+          if (p.z > top) az += 4.0 * (top - p.z);
+          if (p.z < bottom) az += 4.0 * (bottom - p.z);
+
+          // 6. Arena boundary walls
+          const boundary = ARENA_HALF - 1.0;
+          if (p.x < -boundary) ax += 2.0 * (-boundary - p.x);
+          if (p.x > boundary) ax -= 2.0 * (p.x - boundary);
+          if (p.y < -boundary) ay += 2.0 * (-boundary - p.y);
+          if (p.y > boundary) ay -= 2.0 * (p.y - boundary);
+
+          // Velocity integration & speed clamping [0.15, 0.80 m/s]
+          v.x += ax * DT;
+          v.y += ay * DT;
+          v.z += az * DT;
+          const speed = Math.hypot(v.x, v.y, v.z);
+          const clampedSpeed = Math.max(0.15, Math.min(0.80, speed));
+          v.x = (v.x / (speed || 1)) * clampedSpeed;
+          v.y = (v.y / (speed || 1)) * clampedSpeed;
+          v.z = (v.z / (speed || 1)) * clampedSpeed;
+
+          // Position integration
+          p.x += v.x * DT;
+          p.y += v.y * DT;
+          p.z += v.z * DT;
+
+          // Store 3D trail
+          this.trails[i].push({ x: p.x, y: p.y, z: p.z });
+          if (this.trails[i].length > 14) this.trails[i].shift();
+        }
+
+        this.scaredCount = scaredCount;
+      }
+    }
+
+    const sim = new Fish3DSim();
+
+    // -------------------------------------------------------------
+    // 3D Perspective Projection Engine (Zero-dependency WebGL / Math)
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+
+    // Camera Orbit State
+    let camYaw = -0.75;      // radians
+    let camPitch = 0.45;     // radians
+    let camDist = 38.0;      // distance from arena center
+    const targetLook = { x: 0, y: 0, z: -0.5 };
+
+    // Projection Function
+    function project3D(x, y, z) {
+      // 1. World to Camera Translation
+      let rx = x - targetLook.x;
+      let ry = y - targetLook.y;
+      let rz = z - targetLook.z;
+
+      // 2. Yaw rotation (around Z)
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      // 3. Pitch rotation (around X)
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      // 4. Distance offset
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null; // Behind camera plane
+
+      // 5. Perspective division (FOV factor ~ 650)
+      const fov = 700;
+      const sx = canvas.width / 2 + (x2 / camZ) * fov;
+      const sy = canvas.height / 2 - (z2 / camZ) * fov;
+
+      return { x: sx, y: sy, depth: camZ };
+    }
+
+    // -------------------------------------------------------------
+    // Mouse Orbit & Keyboard Drone Flight
+    // -------------------------------------------------------------
+    let isDragging = false;
+    let lastMouseX = 0, lastMouseY = 0;
+
+    canvas.addEventListener("pointerdown", (e) => {
+      isDragging = true;
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      const dx = e.clientX - lastMouseX;
+      const dy = e.clientY - lastMouseY;
+      camYaw += dx * 0.008;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + dy * 0.008));
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+    });
+
+    window.addEventListener("pointerup", () => { isDragging = false; });
+
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      camDist = Math.max(12.0, Math.min(75.0, camDist + e.deltaY * 0.04));
+    }, { passive: false });
+
+    // Keyboard inputs for manual drone flight
+    const keys = {};
+    window.addEventListener("keydown", (e) => {
+      keys[e.key.toLowerCase()] = true;
+      if (["w","a","s","d","q","e"].includes(e.key.toLowerCase())) {
+        sim.drone.auto = false;
+        document.getElementById("btnDroneMode").innerText = "🎮 Drone: User Manual Control";
+      }
+    });
+    window.addEventListener("keyup", (e) => { keys[e.key.toLowerCase()] = false; });
+
+    function handleKeyboard() {
+      if (sim.drone.auto) return;
+      sim.drone.vx = 0; sim.drone.vy = 0; sim.drone.vz = 0;
+      if (keys["w"]) sim.drone.vy += 1;
+      if (keys["s"]) sim.drone.vy -= 1;
+      if (keys["a"]) sim.drone.vx -= 1;
+      if (keys["d"]) sim.drone.vx += 1;
+      if (keys["e"]) sim.drone.vz += 1;
+      if (keys["q"]) sim.drone.vz -= 1;
+    }
+
+    // UI Buttons
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnDroneMode").addEventListener("click", () => {
+      sim.drone.auto = !sim.drone.auto;
+      document.getElementById("btnDroneMode").innerText = sim.drone.auto ? "🚁 Autopilot: Orbiting" : "🎮 Drone: User Manual Control";
+    });
+    document.getElementById("sliderWave").addEventListener("input", (e) => {
+      sim.waveAmp = parseFloat(e.target.value);
+      document.getElementById("waveVal").innerText = sim.waveAmp.toFixed(2) + "m";
+    });
+    document.getElementById("sliderFlee").addEventListener("input", (e) => {
+      sim.fleeGain = parseFloat(e.target.value);
+      document.getElementById("fleeVal").innerText = sim.fleeGain.toFixed(1) + "x";
+    });
+    document.getElementById("sliderCohesion").addEventListener("input", (e) => {
+      sim.cohesionGain = parseFloat(e.target.value);
+      document.getElementById("cohesionVal").innerText = sim.cohesionGain.toFixed(1) + "x";
+    });
+
+    document.getElementById("camIso").addEventListener("click", () => { camYaw = -0.75; camPitch = 0.45; camDist = 38.0; });
+    document.getElementById("camSide").addEventListener("click", () => { camYaw = 0.0; camPitch = 0.08; camDist = 34.0; });
+    document.getElementById("camTop").addEventListener("click", () => { camYaw = 0.0; camPitch = 1.45; camDist = 42.0; });
+
+    // -------------------------------------------------------------
+    // 3D Rendering Loop
+    // -------------------------------------------------------------
+    function draw3DScene() {
+      handleKeyboard();
+      sim.step();
+
+      // Telemetry
+      const centers = sim.getSchoolCenters();
+      document.getElementById("statSchoolA").innerText = `X:${centers[0].x.toFixed(1)}, Y:${centers[0].y.toFixed(1)}, Z:${centers[0].z.toFixed(1)}m`;
+      document.getElementById("statSchoolB").innerText = `X:${centers[1].x.toFixed(1)}, Y:${centers[1].y.toFixed(1)}, Z:${centers[1].z.toFixed(1)}m`;
+      document.getElementById("statDrone").innerText = `X:${sim.drone.x.toFixed(1)}, Y:${sim.drone.y.toFixed(1)}, Z:${sim.drone.z.toFixed(1)}m`;
+      document.getElementById("statScared").innerText = `Scared Fish: ${sim.scaredCount} / 32`;
+
+      // Clear Canvas & Background Gradient
+      ctx.fillStyle = "#030c17";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 1. Draw Seabed / Floor Grid at z = -3.5m
+      const seabedZ = -3.5;
+      ctx.strokeStyle = "rgba(10, 40, 65, 0.5)";
+      ctx.lineWidth = 1;
+      const step = 3.0;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += step) {
+        const p1 = project3D(x, -ARENA_HALF, seabedZ);
+        const p2 = project3D(x, ARENA_HALF, seabedZ);
+        if (p1 && p2) {
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+        }
+      }
+      for (let y = -ARENA_HALF; y <= ARENA_HALF; y += step) {
+        const p1 = project3D(-ARENA_HALF, y, seabedZ);
+        const p2 = project3D(ARENA_HALF, y, seabedZ);
+        if (p1 && p2) {
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+        }
+      }
+
+      // Arena 3D Boundary Posts
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+      ctx.lineWidth = 1.5;
+      const corners = [
+        [-ARENA_HALF, -ARENA_HALF], [ARENA_HALF, -ARENA_HALF],
+        [ARENA_HALF, ARENA_HALF], [-ARENA_HALF, ARENA_HALF]
+      ];
+      for (let i = 0; i < 4; i++) {
+        const [cx, cy] = corners[i];
+        const pBot = project3D(cx, cy, seabedZ);
+        const pTop = project3D(cx, cy, 2.0);
+        if (pBot && pTop) {
+          ctx.beginPath();
+          ctx.moveTo(pBot.x, pBot.y);
+          ctx.lineTo(pTop.x, pTop.y);
+          ctx.stroke();
+        }
+      }
+
+      // 2. Draw 3D Waypoint Spheres
+      for (let s = 0; s < N_SCHOOLS; s++) {
+        const tgt = sim.targets[s];
+        const pt = project3D(tgt.x, tgt.y, tgt.z);
+        if (pt) {
+          ctx.strokeStyle = s === 0 ? "rgba(34, 211, 238, 0.7)" : "rgba(52, 211, 153, 0.7)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, Math.max(4, 180 / pt.depth), 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.fillStyle = s === 0 ? "#22d3ee" : "#34d399";
+          ctx.font = "11px monospace";
+          ctx.fillText(`Target ${s + 1}`, pt.x + 8, pt.y - 4);
+        }
+      }
+
+      // 3. Draw 3D Trails
+      for (let i = 0; i < TOTAL_FISH; i++) {
+        const tr = sim.trails[i];
+        if (tr.length < 2) continue;
+        const s = sim.schoolId[i];
+        ctx.strokeStyle = s === 0 ? "rgba(34, 211, 238, 0.15)" : "rgba(52, 211, 153, 0.15)";
+        ctx.lineWidth = 1.0;
+        ctx.beginPath();
+        let started = false;
+        for (let k = 0; k < tr.length; k++) {
+          const pt = project3D(tr[k].x, tr[k].y, tr[k].z);
+          if (!pt) continue;
+          if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        if (started) ctx.stroke();
+      }
+
+      // 4. Draw 3D Fish Bodies (Sorted by Depth)
+      const renderList = [];
+      for (let i = 0; i < TOTAL_FISH; i++) {
+        const p = sim.pos[i];
+        const v = sim.vel[i];
+        const pt = project3D(p.x, p.y, p.z);
+        if (pt) {
+          renderList.push({
+            type: "fish",
+            index: i,
+            depth: pt.depth,
+            pt: pt,
+            p: p,
+            v: v,
+            school: sim.schoolId[i]
+          });
+        }
+      }
+
+      // Add Drone to Render List
+      const dpt = project3D(sim.drone.x, sim.drone.y, sim.drone.z);
+      if (dpt) {
+        renderList.push({
+          type: "drone",
+          depth: dpt.depth,
+          pt: dpt,
+          pos: sim.drone
+        });
+      }
+
+      // Sort Back-to-Front
+      renderList.sort((a, b) => b.depth - a.depth);
+
+      // Render Objects
+      for (const obj of renderList) {
+        if (obj.type === "fish") {
+          const { pt, v, school } = obj;
+          // Calculate heading in screen space
+          const forward = project3D(obj.p.x + v.x * 0.4, obj.p.y + v.y * 0.4, obj.p.z + v.z * 0.4);
+          const angle = forward ? Math.atan2(forward.y - pt.y, forward.x - pt.x) : 0;
+          const sz = Math.max(3, 160 / pt.depth);
+
+          ctx.save();
+          ctx.translate(pt.x, pt.y);
+          ctx.rotate(angle);
+
+          // 3D oriented fish body
+          ctx.fillStyle = school === 0 ? "#38bdf8" : "#4ade80";
+          ctx.beginPath();
+          ctx.moveTo(sz * 1.5, 0);
+          ctx.lineTo(-sz, -sz * 0.6);
+          ctx.lineTo(-sz * 0.5, 0);
+          ctx.lineTo(-sz, sz * 0.6);
+          ctx.closePath();
+          ctx.fill();
+
+          ctx.restore();
+        } else if (obj.type === "drone") {
+          const { pt, pos } = obj;
+          const sz = Math.max(6, 280 / pt.depth);
+
+          // 3D Flee Cone / Cylinder projection into the water (radius 2.5m)
+          ctx.strokeStyle = "rgba(239, 68, 68, 0.35)";
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          const rSteps = 16;
+          let firstP = null;
+          for (let step = 0; step <= rSteps; step++) {
+            const th = (step / rSteps) * Math.PI * 2;
+            const px = pos.x + 2.5 * Math.cos(th);
+            const py = pos.y + 2.5 * Math.sin(th);
+            const surfZ = sim.getWaveHeight(px, py, sim.time);
+            const cp = project3D(px, py, surfZ);
+            if (cp) {
+              if (step === 0) { ctx.moveTo(cp.x, cp.y); firstP = cp; }
+              else ctx.lineTo(cp.x, cp.y);
+            }
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Drone Body & Rotors
+          ctx.fillStyle = "#fbbf24";
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, sz * 0.5, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Quadrotor Arms
+          ctx.strokeStyle = "#fbbf24";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(pt.x - sz, pt.y - sz * 0.5);
+          ctx.lineTo(pt.x + sz, pt.y + sz * 0.5);
+          ctx.moveTo(pt.x - sz, pt.y + sz * 0.5);
+          ctx.lineTo(pt.x + sz, pt.y - sz * 0.5);
+          ctx.stroke();
+
+          // Green bathymetric LiDAR scan beam reaching water
+          const beamTarget = project3D(pos.x, pos.y, sim.getWaveHeight(pos.x, pos.y, sim.time));
+          if (beamTarget) {
+            ctx.strokeStyle = "rgba(57, 255, 106, 0.4)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(pt.x, pt.y);
+            ctx.lineTo(beamTarget.x, beamTarget.y);
+            ctx.stroke();
+          }
+
+          ctx.fillStyle = "#fbbf24";
+          ctx.font = "12px monospace";
+          ctx.fillText("Drone 0", pt.x + sz + 4, pt.y - 4);
+        }
+      }
+
+      // 5. Draw Undulating 3D Water Surface Mesh (Gerstner Wave Lattice)
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.22)";
+      ctx.lineWidth = 1;
+      const waveMeshStep = 2.5;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += waveMeshStep) {
+        ctx.beginPath();
+        let started = false;
+        for (let y = -ARENA_HALF; y <= ARENA_HALF; y += 1.0) {
+          const wz = sim.getWaveHeight(x, y, sim.time);
+          const pt = project3D(x, y, wz);
+          if (!pt) continue;
+          if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        if (started) ctx.stroke();
+      }
+      for (let y = -ARENA_HALF; y <= ARENA_HALF; y += waveMeshStep) {
+        ctx.beginPath();
+        let started = false;
+        for (let x = -ARENA_HALF; x <= ARENA_HALF; x += 1.0) {
+          const wz = sim.getWaveHeight(x, y, sim.time);
+          const pt = project3D(x, y, wz);
+          if (!pt) continue;
+          if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        if (started) ctx.stroke();
+      }
+
+      requestAnimationFrame(draw3DScene);
+    }
+
+    requestAnimationFrame(draw3DScene);
+  </script>
+</body>
+</html>

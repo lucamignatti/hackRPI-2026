@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - Multi-Agent 3D Net Fishing</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-emerald-400 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Ocean — Multi-Agent Net Fishing & Team Coordination</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Simulating <code class="text-emerald-400 font-mono">skyhand/env/net.py</code> + <code class="text-emerald-400 font-mono">expert.py</code>: 3 drones holding a mass-spring net, scooping fish schools, and hauling to the boat.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 bg-[var(--background)] px-2.5 py-1 rounded-lg border border-[var(--border)] text-xs">
+          <span class="text-[var(--muted-foreground)] whitespace-nowrap">School Clump:</span>
+          <input id="sliderCohesion" type="range" min="0.2" max="3.0" step="0.2" value="1.0" class="w-20 accent-emerald-400 cursor-pointer">
+          <span id="cohesionVal" class="font-mono text-emerald-300 w-8">1.0x</span>
+        </div>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Randomize Ocean
+        </button>
+        <button id="btnPhase" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-all">
+          ⏭️ Skip to Next Phase
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#030d1a] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Mission Phase Overlay Banner -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1.5 text-[12px] bg-black/70 backdrop-blur p-3 rounded-lg border border-cyan-800/40">
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-bold text-white">MISSION STAGE:</span>
+          <span id="phasePill" class="px-2 py-0.5 rounded text-[11px] font-semibold font-mono bg-cyan-900/80 text-cyan-300 border border-cyan-500/40">
+            Phase 1: Approach Corners
+          </span>
+        </div>
+        <div id="phaseDesc" class="text-xs text-cyan-100/90 max-w-xs">
+          Drones 0, 1, and 2 fly in transit lanes toward grabbable net corner buoys.
+        </div>
+      </div>
+
+      <!-- Live Gauges on Viewport -->
+      <div class="absolute top-3 right-3 flex flex-col gap-1.5 bg-black/70 backdrop-blur p-3 rounded-lg text-[12px] border border-cyan-800/40 min-w-[180px]">
+        <div class="flex justify-between items-center text-xs">
+          <span class="text-[var(--muted-foreground)]">Fish Trapped:</span>
+          <span id="gaugeFish" class="font-mono font-bold text-emerald-400 text-sm">0 / 32</span>
+        </div>
+        <div class="flex justify-between items-center text-xs">
+          <span class="text-[var(--muted-foreground)]">Net Stretch:</span>
+          <span id="gaugeStretch" class="font-mono font-bold text-cyan-300 text-sm">0.0%</span>
+        </div>
+        <div class="w-full bg-zinc-800 h-1.5 rounded-full overflow-hidden mt-0.5">
+          <div id="stretchBar" class="bg-cyan-400 h-full w-0 transition-all duration-100"></div>
+        </div>
+        <div class="flex justify-between items-center text-xs mt-1">
+          <span class="text-[var(--muted-foreground)]">Haul Target:</span>
+          <span class="font-mono text-amber-300 text-xs">Delivery Boat Deck</span>
+        </div>
+      </div>
+
+      <!-- Controls Hint -->
+      <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-[12px] text-cyan-300 border border-cyan-700/40">
+        <span>🎥 Rotate: <span class="text-white">Click & Drag</span> | Zoom: <span class="text-white">Mouse Wheel</span></span>
+      </div>
+
+      <div class="absolute bottom-3 right-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-[12px] text-amber-300 border border-amber-600/30">
+        <span class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-amber-400"></span> Drone 0 (Yellow)
+          <span class="w-2 h-2 rounded-full bg-cyan-400 ml-1"></span> Drone 1 (Cyan)
+          <span class="w-2 h-2 rounded-full bg-purple-400 ml-1"></span> Drone 2 (Purple)
+        </span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone Team Status</div>
+        <div id="statGrip" class="font-mono text-amber-300 font-semibold text-sm">Grippers: Open</div>
+        <div id="statDronesAlt" class="text-[12px] text-cyan-400">Altitudes: ~1.5m</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Net Centroid (64 Nodes)</div>
+        <div id="statNetCenter" class="font-mono text-cyan-300 font-semibold text-sm">X: 0.0, Y: 0.0, Z: -0.2m</div>
+        <div id="statNetSag" class="text-[12px] text-[var(--muted-foreground)]">PBD sag pocket: 1.2m deep</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Target Fish School</div>
+        <div id="statSchoolPos" class="font-mono text-emerald-400 font-semibold text-sm">Dist to Net: 8.5m</div>
+        <div class="text-[12px] text-emerald-500/80">32 Reynolds Boid fish</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Delivery Boat Target</div>
+        <div id="statBoatPos" class="font-mono text-amber-400 font-semibold text-sm">Deck at (-10.0, -8.0)</div>
+        <div class="text-[12px] text-[var(--muted-foreground)]">Catch zone: radius 2.5m</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // -------------------------------------------------------------
+    // Multi-Agent Net & Ocean Simulation Logic
+    // -------------------------------------------------------------
+    const ARENA_HALF = 15.0;
+    const NUM_DRONES = 3;
+    const NET_GRID = 6; // 6x6 spring mesh for smooth 60fps rendering
+    const NUM_NODES = NET_GRID * NET_GRID;
+    const NET_SPACING = 1.1; // meters
+    const TOTAL_FISH = 32;
+    const DT = 0.035;
+
+    class TeamNetSim {
+      constructor() {
+        this.time = 0.0;
+        this.phase = 0; // 0: approach, 1: grasp, 2: lift, 3: trawl, 4: scoop, 5: haul, 6: deliver
+        this.cohesionMult = 1.0;
+        this.reset();
+      }
+
+      reset() {
+        this.time = 0.0;
+        this.phase = 0;
+        this.caughtFish = new Set();
+        this.netStretch = 0.0;
+
+        // Boat Delivery Target
+        this.boat = {
+          x: -8.0 + (Math.random() - 0.5) * 4.0,
+          y: -8.0 + (Math.random() - 0.5) * 4.0,
+          z: 0.0,
+          radius: 2.5
+        };
+
+        // Net Initial Placement
+        this.netCenter = { x: 3.0, y: 2.0, z: -0.1 };
+        this.nodes = [];
+        this.restDist = NET_SPACING;
+
+        for (let r = 0; r < NET_GRID; r++) {
+          for (let c = 0; c < NET_GRID; c++) {
+            const lx = (c - (NET_GRID - 1) / 2) * NET_SPACING;
+            const ly = (r - (NET_GRID - 1) / 2) * NET_SPACING;
+            // Interior nodes sag deeper into the water like a real scoop net
+            const sag = (r > 0 && r < NET_GRID - 1 && c > 0 && c < NET_GRID - 1) ? -0.8 : -0.15;
+            this.nodes.push({
+              x: this.netCenter.x + lx,
+              y: this.netCenter.y + ly,
+              z: this.netCenter.z + sag,
+              vx: 0, vy: 0, vz: 0,
+              isCorner: (r === 0 && c === 0) || (r === 0 && c === NET_GRID - 1) ||
+                        (r === NET_GRID - 1 && c === NET_GRID - 1) || (r === NET_GRID - 1 && c === 0)
+            });
+          }
+        }
+
+        // Corner Indices: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+        this.cornerIdx = [
+          0,
+          NET_GRID - 1,
+          NET_GRID * NET_GRID - 1,
+          NET_GRID * (NET_GRID - 1)
+        ];
+
+        // 3 Team Drones holding corners (Drone 0 -> corner 0, Drone 1 -> corner 1, Drone 2 -> corner 2)
+        this.drones = [];
+        const droneColors = ["#fbbf24", "#22d3ee", "#c084fc"];
+        for (let i = 0; i < NUM_DRONES; i++) {
+          const cornerNode = this.nodes[this.cornerIdx[i]];
+          this.drones.push({
+            id: i,
+            color: droneColors[i],
+            x: cornerNode.x + (i - 1) * 2.0,
+            y: cornerNode.y + (i - 1) * 2.0,
+            z: 2.5 + i * 0.5, // staggered takeoff lanes
+            targetX: cornerNode.x,
+            targetY: cornerNode.y,
+            targetZ: 1.5,
+            holding: false,
+            grip: 0.0
+          });
+        }
+
+        // 32 Fish in a School
+        this.fish = [];
+        this.schoolTarget = { x: 5.0, y: 4.0, z: -1.0 };
+        for (let i = 0; i < TOTAL_FISH; i++) {
+          const ang = Math.random() * Math.PI * 2;
+          const r = Math.random() * 1.5;
+          this.fish.push({
+            x: this.schoolTarget.x + Math.cos(ang) * r,
+            y: this.schoolTarget.y + Math.sin(ang) * r,
+            z: -0.7 - Math.random() * 0.5,
+            vx: Math.cos(ang + Math.PI/2) * 0.4,
+            vy: Math.sin(ang + Math.PI/2) * 0.4,
+            vz: 0.0
+          });
+        }
+      }
+
+      getWaveHeight(x, y, t) {
+        return 0.35 * Math.sin(0.35 * x + 1.2 * t) + 0.2 * Math.sin(0.28 * y - 0.9 * t);
+      }
+
+      nextPhase() {
+        this.phase = (this.phase + 1) % 6;
+      }
+
+      step() {
+        this.time += DT;
+
+        // 1. Mission Coordinator State Machine (from skyhand/env/expert.py)
+        // -------------------------------------------------------------
+        const netCentroid = this.getNetCentroid();
+        const schoolCenter = this.getFishSchoolCenter();
+
+        // Phase 0: Approach corners
+        if (this.phase === 0) {
+          let allAbove = true;
+          for (let i = 0; i < NUM_DRONES; i++) {
+            const cNode = this.nodes[this.cornerIdx[i]];
+            this.drones[i].targetX = cNode.x;
+            this.drones[i].targetY = cNode.y;
+            this.drones[i].targetZ = 1.6 + i * 0.4;
+            const dist = Math.hypot(this.drones[i].x - cNode.x, this.drones[i].y - cNode.y);
+            if (dist > 0.4) allAbove = false;
+          }
+          if (allAbove) this.phase = 1; // Transition to Grasp
+        }
+        // Phase 1: Descend and attach grippers to net corner handles
+        else if (this.phase === 1) {
+          let allGrabbed = true;
+          for (let i = 0; i < NUM_DRONES; i++) {
+            const cNode = this.nodes[this.cornerIdx[i]];
+            this.drones[i].targetX = cNode.x;
+            this.drones[i].targetY = cNode.y;
+            this.drones[i].targetZ = cNode.z + 0.3; // gripper touching corner handle
+            const dist = Math.hypot(this.drones[i].x - cNode.x, this.drones[i].y - cNode.y, this.drones[i].z - (cNode.z + 0.3));
+            if (dist < 0.35) {
+              this.drones[i].holding = true;
+              this.drones[i].grip = 1.0;
+            } else {
+              allGrabbed = false;
+            }
+          }
+          if (allGrabbed) this.phase = 2; // Transition to Trawl
+        }
+        // Phase 2: Coordinated Trawling under the fish school
+        else if (this.phase === 2) {
+          const dx = schoolCenter.x - netCentroid.x;
+          const dy = schoolCenter.y - netCentroid.y;
+          const distToSchool = Math.hypot(dx, dy);
+
+          for (let i = 0; i < NUM_DRONES; i++) {
+            // Team formation maintains net spread while moving toward school
+            const angle = (i / NUM_DRONES) * Math.PI * 2;
+            const spreadR = 2.4;
+            this.drones[i].targetX = schoolCenter.x + Math.cos(angle) * spreadR;
+            this.drones[i].targetY = schoolCenter.y + Math.sin(angle) * spreadR;
+            this.drones[i].targetZ = 0.8; // keep net skimming low in the water
+          }
+
+          if (distToSchool < 1.6) {
+            this.phase = 3; // Scoop & Lift!
+          }
+        }
+        // Phase 3: Synchronous Lift (Scooping the school out of the water)
+        else if (this.phase === 3) {
+          let teamHigh = true;
+          for (let i = 0; i < NUM_DRONES; i++) {
+            this.drones[i].targetZ = 3.2; // lift above water
+            if (this.drones[i].z < 2.8) teamHigh = false;
+          }
+          // Trap all fish inside the net volume!
+          for (let j = 0; j < TOTAL_FISH; j++) {
+            const f = this.fish[j];
+            if (Math.hypot(f.x - netCentroid.x, f.y - netCentroid.y) < 2.5) {
+              this.caughtFish.add(j);
+            }
+          }
+          if (teamHigh) this.phase = 4; // Fly to Boat
+        }
+        // Phase 4: Team formation flight to the delivery boat
+        else if (this.phase === 4) {
+          const distToBoat = Math.hypot(netCentroid.x - this.boat.x, netCentroid.y - this.boat.y);
+          for (let i = 0; i < NUM_DRONES; i++) {
+            const angle = (i / NUM_DRONES) * Math.PI * 2;
+            this.drones[i].targetX = this.boat.x + Math.cos(angle) * 2.2;
+            this.drones[i].targetY = this.boat.y + Math.sin(angle) * 2.2;
+            this.drones[i].targetZ = 3.0;
+          }
+          if (distToBoat < 1.2) {
+            this.phase = 5; // Delivered!
+          }
+        }
+        // Phase 5: Lower catch onto boat deck
+        else if (this.phase === 5) {
+          for (let i = 0; i < NUM_DRONES; i++) {
+            this.drones[i].targetZ = 1.4;
+          }
+        }
+
+        // 2. Drone PD Velocity Tracking
+        // -------------------------------------------------------------
+        for (let i = 0; i < NUM_DRONES; i++) {
+          const d = this.drones[i];
+          const vx = (d.targetX - d.x) * 2.0;
+          const vy = (d.targetY - d.y) * 2.0;
+          const vz = (d.targetZ - d.z) * 2.5;
+
+          // Velocity clamping
+          d.x += Math.max(-4.0, Math.min(4.0, vx)) * DT;
+          d.y += Math.max(-4.0, Math.min(4.0, vy)) * DT;
+          d.z += Math.max(-3.0, Math.min(3.0, vz)) * DT;
+        }
+
+        // 3. Position-Based Dynamics (PBD) Spring Mesh Net
+        // -------------------------------------------------------------
+        // Apply pin constraints to corners held by drones
+        for (let i = 0; i < NUM_DRONES; i++) {
+          if (this.drones[i].holding) {
+            const node = this.nodes[this.cornerIdx[i]];
+            node.x = this.drones[i].x;
+            node.y = this.drones[i].y;
+            node.z = this.drones[i].z - 0.25; // attached to bottom gripper
+          }
+        }
+
+        // Gravity, buoyancy, and wave water drag on net nodes
+        let maxStretch = 0.0;
+        for (let idx = 0; idx < NUM_NODES; idx++) {
+          const n = this.nodes[idx];
+          const isHeld = (idx === this.cornerIdx[0] && this.drones[0].holding) ||
+                         (idx === this.cornerIdx[1] && this.drones[1].holding) ||
+                         (idx === this.cornerIdx[2] && this.drones[2].holding);
+
+          if (!isHeld) {
+            const waveZ = this.getWaveHeight(n.x, n.y, this.time);
+            // Underwater buoyancy vs weight
+            if (n.z < waveZ) {
+              const depth = waveZ - n.z;
+              n.vz += (12.0 * depth - 9.81) * DT; // buoyant perimeter floating
+            } else {
+              n.vz -= 9.81 * DT; // air gravity
+            }
+
+            // Water viscosity damping
+            n.vx *= 0.88;
+            n.vy *= 0.88;
+            n.vz *= 0.88;
+
+            n.x += n.vx * DT;
+            n.y += n.vy * DT;
+            n.z += n.vz * DT;
+          }
+        }
+
+        // PBD Distance Constraints (Rope Edges)
+        for (let iter = 0; iter < 5; iter++) {
+          for (let r = 0; r < NET_GRID; r++) {
+            for (let c = 0; c < NET_GRID; c++) {
+              const i1 = r * NET_GRID + c;
+              const n1 = this.nodes[i1];
+
+              // Horizontal & Vertical neighbor constraints
+              const neighbors = [];
+              if (c + 1 < NET_GRID) neighbors.push(r * NET_GRID + (c + 1));
+              if (r + 1 < NET_GRID) neighbors.push((r + 1) * NET_GRID + c);
+
+              for (const i2 of neighbors) {
+                const n2 = this.nodes[i2];
+                const dx = n2.x - n1.x;
+                const dy = n2.y - n1.y;
+                const dz = n2.z - n1.z;
+                const dist = Math.hypot(dx, dy, dz) || 1e-4;
+
+                const stretch = (dist - this.restDist) / this.restDist;
+                if (stretch > maxStretch) maxStretch = stretch;
+
+                if (dist > this.restDist) {
+                  const corr = (dist - this.restDist) / dist * 0.45;
+                  const is1Pinned = (i1 === this.cornerIdx[0] && this.drones[0].holding) ||
+                                    (i1 === this.cornerIdx[1] && this.drones[1].holding) ||
+                                    (i1 === this.cornerIdx[2] && this.drones[2].holding);
+                  const is2Pinned = (i2 === this.cornerIdx[0] && this.drones[0].holding) ||
+                                    (i2 === this.cornerIdx[1] && this.drones[1].holding) ||
+                                    (i2 === this.cornerIdx[2] && this.drones[2].holding);
+
+                  if (!is1Pinned && !is2Pinned) {
+                    n1.x += dx * corr * 0.5; n1.y += dy * corr * 0.5; n1.z += dz * corr * 0.5;
+                    n2.x -= dx * corr * 0.5; n2.y -= dy * corr * 0.5; n2.z -= dz * corr * 0.5;
+                  } else if (!is1Pinned) {
+                    n1.x += dx * corr; n1.y += dy * corr; n1.z += dz * corr;
+                  } else if (!is2Pinned) {
+                    n2.x -= dx * corr; n2.y -= dy * corr; n2.z -= dz * corr;
+                  }
+                }
+              }
+            }
+          }
+        }
+        this.netStretch = maxStretch;
+
+        // 4. Fish Flocking & Capture (Full Reynolds Boids from skyhand/env/fish.py)
+        // -------------------------------------------------------------
+        const lowestNetNode = this.nodes.reduce((min, n) => n.z < min.z ? n : min, this.nodes[0]);
+        
+        let uncaughtCount = 0;
+        let cX = 0, cY = 0, cZ = 0;
+        let mvX = 0, mvY = 0, mvZ = 0;
+        for (let j = 0; j < TOTAL_FISH; j++) {
+          if (!this.caughtFish.has(j)) {
+            cX += this.fish[j].x; cY += this.fish[j].y; cZ += this.fish[j].z;
+            mvX += this.fish[j].vx; mvY += this.fish[j].vy; mvZ += this.fish[j].vz;
+            uncaughtCount++;
+          }
+        }
+        if (uncaughtCount > 0) {
+          cX /= uncaughtCount; cY /= uncaughtCount; cZ /= uncaughtCount;
+          mvX /= uncaughtCount; mvY /= uncaughtCount; mvZ /= uncaughtCount;
+        }
+
+        // Wander target when school reaches near it
+        const distToTgt = Math.hypot(cX - this.schoolTarget.x, cY - this.schoolTarget.y);
+        if (distToTgt < 2.0) {
+          this.schoolTarget.x = (Math.random() - 0.5) * 14.0;
+          this.schoolTarget.y = (Math.random() - 0.5) * 14.0;
+        }
+
+        for (let j = 0; j < TOTAL_FISH; j++) {
+          const f = this.fish[j];
+          if (this.caughtFish.has(j)) {
+            // Trapped fish ride safely inside the bottom pocket of the net mesh!
+            f.x = lowestNetNode.x + ((j % 4) - 1.5) * 0.22;
+            f.y = lowestNetNode.y + (Math.floor(j / 4) - 3) * 0.22;
+            f.z = lowestNetNode.z + 0.15;
+            f.vx = lowestNetNode.vx;
+            f.vy = lowestNetNode.vy;
+            f.vz = lowestNetNode.vz;
+          } else {
+            // Cohesion: pull towards school center (modulated by slider)
+            let ax = (0.6 * this.cohesionMult) * (cX - f.x);
+            let ay = (0.6 * this.cohesionMult) * (cY - f.y);
+            let az = (0.6 * this.cohesionMult) * (cZ - f.z);
+
+            // Alignment: match school mean velocity
+            ax += 0.5 * (mvX - f.vx);
+            ay += 0.5 * (mvY - f.vy);
+            az += 0.5 * (mvZ - f.vz);
+
+            // Waypoint seeking
+            const tdx = this.schoolTarget.x - f.x;
+            const tdy = this.schoolTarget.y - f.y;
+            const tdz = this.schoolTarget.z - f.z;
+            const tdist = Math.max(1.0, Math.hypot(tdx, tdy, tdz));
+            ax += 0.15 * (tdx / tdist);
+            ay += 0.15 * (tdy / tdist);
+            az += 0.15 * (tdz / tdist);
+
+            // Separation from other fish (inverse-square repulsion)
+            for (let k = 0; k < TOTAL_FISH; k++) {
+              if (k !== j && !this.caughtFish.has(k)) {
+                const fk = this.fish[k];
+                const dx = f.x - fk.x;
+                const dy = f.y - fk.y;
+                const dz = f.z - fk.z;
+                const d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 < 0.6 * 0.6 && d2 > 1e-4) {
+                  const dist = Math.sqrt(d2);
+                  const sep = (0.28 / (dist * dist));
+                  ax += dx * sep;
+                  ay += dy * sep;
+                  az += dz * sep;
+                }
+              }
+            }
+
+            // Avoid net mesh if approaching
+            const dNetX = f.x - netCentroid.x;
+            const dNetY = f.y - netCentroid.y;
+            const distNet = Math.hypot(dNetX, dNetY);
+            if (distNet < 2.5 && this.phase < 3) {
+              const fleeForce = 0.8 / Math.max(0.2, distNet);
+              ax += (dNetX / (distNet || 1)) * fleeForce;
+              ay += (dNetY / (distNet || 1)) * fleeForce;
+            }
+
+            // Flee drones if any drone is overhead and low
+            for (let d = 0; d < NUM_DRONES; d++) {
+              const dr = this.drones[d];
+              const ddx = f.x - dr.x;
+              const ddy = f.y - dr.y;
+              const ddist = Math.hypot(ddx, ddy);
+              if (ddist < 2.5 && dr.z < 2.2) {
+                const df = 0.8 / Math.max(0.1, ddist * ddist);
+                ax += ddx * df;
+                ay += ddy * df;
+              }
+            }
+
+            // Depth confinement under waves: [surface - 2.0, surface - 0.3]
+            const waveZ = this.getWaveHeight(f.x, f.y, this.time);
+            const top = waveZ - 0.3;
+            const bottom = waveZ - 2.0;
+            if (f.z > top) az += 4.0 * (top - f.z);
+            if (f.z < bottom) az += 4.0 * (bottom - f.z);
+
+            // Arena boundary reflection
+            if (Math.abs(f.x) > ARENA_HALF - 2) ax -= Math.sign(f.x) * 2.5;
+            if (Math.abs(f.y) > ARENA_HALF - 2) ay -= Math.sign(f.y) * 2.5;
+
+            // Integrate velocity with DT
+            f.vx += ax * DT;
+            f.vy += ay * DT;
+            f.vz += az * DT;
+
+            // Speed clamping [0.15, 0.85] m/s
+            let spd = Math.hypot(f.vx, f.vy, f.vz);
+            if (spd < 1e-4) spd = 1e-4;
+            const targetSpd = Math.max(0.15, Math.min(0.85, spd));
+            f.vx = (f.vx / spd) * targetSpd;
+            f.vy = (f.vy / spd) * targetSpd;
+            f.vz = (f.vz / spd) * targetSpd;
+
+            f.x += f.vx * DT;
+            f.y += f.vy * DT;
+            f.z += f.vz * DT;
+          }
+        }
+      }
+
+      getNetCentroid() {
+        let x = 0, y = 0, z = 0;
+        for (const n of this.nodes) { x += n.x; y += n.y; z += n.z; }
+        return { x: x / NUM_NODES, y: y / NUM_NODES, z: z / NUM_NODES };
+      }
+
+      getFishSchoolCenter() {
+        let x = 0, y = 0, z = 0, count = 0;
+        for (let i = 0; i < TOTAL_FISH; i++) {
+          if (!this.caughtFish.has(i)) {
+            x += this.fish[i].x; y += this.fish[i].y; z += this.fish[i].z;
+            count++;
+          }
+        }
+        return count > 0 ? { x: x / count, y: y / count, z: z / count } : { x: 0, y: 0, z: -1.0 };
+      }
+    }
+
+    const sim = new TeamNetSim();
+
+    // -------------------------------------------------------------
+    // 3D Perspective Projection Engine & Orbit Camera
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+
+    let camYaw = -0.65;
+    let camPitch = 0.42;
+    let camDist = 42.0;
+    const targetLook = { x: 0, y: 0, z: -0.2 };
+
+    function project3D(x, y, z) {
+      const rx = x - targetLook.x;
+      const ry = y - targetLook.y;
+      const rz = z - targetLook.z;
+
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null;
+
+      const fov = 750;
+      return {
+        x: canvas.width / 2 + (x2 / camZ) * fov,
+        y: canvas.height / 2 - (z2 / camZ) * fov,
+        depth: camZ
+      };
+    }
+
+    // Camera Interaction
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      isDragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      camYaw += (e.clientX - lastX) * 0.008;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + (e.clientY - lastY) * 0.008));
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { isDragging = false; });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      camDist = Math.max(15.0, Math.min(80.0, camDist + e.deltaY * 0.04));
+    }, { passive: false });
+
+    // Buttons & Sliders
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnPhase").addEventListener("click", () => { sim.nextPhase(); });
+    document.getElementById("sliderCohesion").addEventListener("input", (e) => {
+      sim.cohesionMult = parseFloat(e.target.value);
+      document.getElementById("cohesionVal").innerText = sim.cohesionMult.toFixed(1) + "x";
+    });
+
+    const phaseNames = [
+      { name: "Phase 1: Approach Corners", desc: "Drones fly in transit formation toward grabbable net buoy lines." },
+      { name: "Phase 2: Descend & Grasp", desc: "Drones match net drift velocity and engage magnetic/weld gripper locks." },
+      { name: "Phase 3: Trawl Under School", desc: "Team flies in triangle formation skimming the sagging net pocket under fish." },
+      { name: "Phase 4: Synchronous Lift", desc: "All 3 drones ascend in unison to 3.2m, enclosing the school in the net!" },
+      { name: "Phase 5: Haul to Boat Deck", desc: "Team navigates across ocean gusts holding the full net catch." },
+      { name: "Phase 6: Catch Delivered", desc: "Net haul lowered onto the delivery vessel's cargo deck." }
+    ];
+
+    // -------------------------------------------------------------
+    // Main 3D Render Loop
+    // -------------------------------------------------------------
+    function render3D() {
+      sim.step();
+
+      // Update UI Telemetry & Phase Banner
+      const pInfo = phaseNames[sim.phase] || phaseNames[0];
+      document.getElementById("phasePill").innerText = pInfo.name;
+      document.getElementById("phaseDesc").innerText = pInfo.desc;
+      document.getElementById("gaugeFish").innerText = `${sim.caughtFish.size} / ${TOTAL_FISH}`;
+      
+      const pct = (sim.netStretch * 100).toFixed(1);
+      document.getElementById("gaugeStretch").innerText = `${pct}%`;
+      document.getElementById("stretchBar").style.width = `${Math.min(100, sim.netStretch * 150)}%`;
+      document.getElementById("stretchBar").className = sim.netStretch > 0.5 ? "bg-red-500 h-full transition-all" : "bg-cyan-400 h-full transition-all";
+
+      const c = sim.getNetCentroid();
+      document.getElementById("statNetCenter").innerText = `X: ${c.x.toFixed(1)}, Y: ${c.y.toFixed(1)}, Z: ${c.z.toFixed(1)}m`;
+      document.getElementById("statGrip").innerText = sim.drones[0].holding ? "Grippers: LOCKED (3/3)" : "Grippers: OPEN";
+      document.getElementById("statDronesAlt").innerText = `Altitudes: ${sim.drones.map(d => d.z.toFixed(1) + 'm').join(', ')}`;
+
+      // Clear Canvas
+      ctx.fillStyle = "#030c17";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 1. Draw Seabed Floor Grid at z = -3.8m
+      const seabedZ = -3.8;
+      ctx.strokeStyle = "rgba(10, 40, 65, 0.4)";
+      ctx.lineWidth = 1;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += 3.0) {
+        const p1 = project3D(x, -ARENA_HALF, seabedZ);
+        const p2 = project3D(x, ARENA_HALF, seabedZ);
+        if (p1 && p2) {
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        }
+      }
+      for (let y = -ARENA_HALF; y <= ARENA_HALF; y += 3.0) {
+        const p1 = project3D(-ARENA_HALF, y, seabedZ);
+        const p2 = project3D(ARENA_HALF, y, seabedZ);
+        if (p1 && p2) {
+          ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+        }
+      }
+
+      // 2. Draw 3D Delivery Boat Deck at z = 0m
+      const boatZ = sim.getWaveHeight(sim.boat.x, sim.boat.y, sim.time);
+      const bp = project3D(sim.boat.x, sim.boat.y, boatZ);
+      if (bp) {
+        // Boat hull box
+        const bw = 2.0, bl = 3.5;
+        const bCorners = [
+          project3D(sim.boat.x - bl/2, sim.boat.y - bw/2, boatZ + 0.3),
+          project3D(sim.boat.x + bl/2, sim.boat.y - bw/2, boatZ + 0.3),
+          project3D(sim.boat.x + bl/2, sim.boat.y + bw/2, boatZ + 0.3),
+          project3D(sim.boat.x - bl/2, sim.boat.y + bw/2, boatZ + 0.3),
+        ];
+        if (bCorners.every(p => p !== null)) {
+          ctx.fillStyle = "rgba(245, 158, 11, 0.25)";
+          ctx.strokeStyle = "#f59e0b";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(bCorners[0].x, bCorners[0].y);
+          for (let k = 1; k < 4; k++) ctx.lineTo(bCorners[k].x, bCorners[k].y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+          ctx.fillStyle = "#f59e0b";
+          ctx.font = "11px monospace";
+          ctx.fillText("Delivery Boat Deck", bp.x - 45, bp.y - 12);
+        }
+      }
+
+      // 3. Draw 3D Position-Based Dynamics Net Mesh
+      // Draw Springs / Ropes connecting grid nodes
+      ctx.strokeStyle = sim.phase >= 3 ? "rgba(52, 211, 153, 0.8)" : "rgba(34, 211, 238, 0.65)";
+      ctx.lineWidth = 1.5;
+      for (let r = 0; r < NET_GRID; r++) {
+        for (let c = 0; c < NET_GRID; c++) {
+          const idx = r * NET_GRID + c;
+          const n1 = sim.nodes[idx];
+          const pt1 = project3D(n1.x, n1.y, n1.z);
+          if (!pt1) continue;
+
+          // Connect right
+          if (c + 1 < NET_GRID) {
+            const n2 = sim.nodes[r * NET_GRID + (c + 1)];
+            const pt2 = project3D(n2.x, n2.y, n2.z);
+            if (pt2) {
+              ctx.beginPath(); ctx.moveTo(pt1.x, pt1.y); ctx.lineTo(pt2.x, pt2.y); ctx.stroke();
+            }
+          }
+          // Connect down
+          if (r + 1 < NET_GRID) {
+            const n2 = sim.nodes[(r + 1) * NET_GRID + c];
+            const pt2 = project3D(n2.x, n2.y, n2.z);
+            if (pt2) {
+              ctx.beginPath(); ctx.moveTo(pt1.x, pt1.y); ctx.lineTo(pt2.x, pt2.y); ctx.stroke();
+            }
+          }
+        }
+      }
+
+      // Draw Net Corner Buoy Handles
+      for (let i = 0; i < 4; i++) {
+        const cNode = sim.nodes[sim.cornerIdx[i]];
+        const cpt = project3D(cNode.x, cNode.y, cNode.z);
+        if (cpt) {
+          ctx.fillStyle = i < NUM_DRONES ? "#38bdf8" : "#94a3b8";
+          ctx.beginPath();
+          ctx.arc(cpt.x, cpt.y, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 4. Draw Tether Cables connecting Drones to Net Corners
+      for (let i = 0; i < NUM_DRONES; i++) {
+        const d = sim.drones[i];
+        const cNode = sim.nodes[sim.cornerIdx[i]];
+        const dpt = project3D(d.x, d.y, d.z);
+        const npt = project3D(cNode.x, cNode.y, cNode.z);
+        if (dpt && npt && d.holding) {
+          ctx.strokeStyle = "rgba(251, 191, 36, 0.85)";
+          ctx.lineWidth = 2.0;
+          ctx.beginPath();
+          ctx.moveTo(dpt.x, dpt.y);
+          ctx.lineTo(npt.x, npt.y);
+          ctx.stroke();
+        }
+      }
+
+      // 5. Draw 3D Fish
+      for (let j = 0; j < TOTAL_FISH; j++) {
+        const f = sim.fish[j];
+        const fpt = project3D(f.x, f.y, f.z);
+        if (fpt) {
+          const isCaught = sim.caughtFish.has(j);
+          ctx.fillStyle = isCaught ? "#4ade80" : "#38bdf8";
+          const sz = Math.max(3, 150 / fpt.depth);
+          ctx.beginPath();
+          ctx.arc(fpt.x, fpt.y, sz, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // 6. Draw 3 Drones with Quadrotor Arms
+      for (let i = 0; i < NUM_DRONES; i++) {
+        const d = sim.drones[i];
+        const dpt = project3D(d.x, d.y, d.z);
+        if (dpt) {
+          const sz = Math.max(6, 260 / dpt.depth);
+
+          // Drone body
+          ctx.fillStyle = d.color;
+          ctx.beginPath();
+          ctx.arc(dpt.x, dpt.y, sz * 0.6, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Rotor Cross
+          ctx.strokeStyle = d.color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(dpt.x - sz, dpt.y - sz * 0.4);
+          ctx.lineTo(dpt.x + sz, dpt.y + sz * 0.4);
+          ctx.moveTo(dpt.x - sz, dpt.y + sz * 0.4);
+          ctx.lineTo(dpt.x + sz, dpt.y - sz * 0.4);
+          ctx.stroke();
+
+          // Green LiDAR ray downward
+          const surfZ = sim.getWaveHeight(d.x, d.y, sim.time);
+          const beamPt = project3D(d.x, d.y, surfZ);
+          if (beamPt) {
+            ctx.strokeStyle = "rgba(57, 255, 106, 0.35)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(dpt.x, dpt.y);
+            ctx.lineTo(beamPt.x, beamPt.y);
+            ctx.stroke();
+          }
+
+          ctx.fillStyle = d.color;
+          ctx.font = "11px monospace";
+          ctx.fillText(`Drone ${i}`, dpt.x + sz + 3, dpt.y - 3);
+        }
+      }
+
+      // 7. Draw Translucent Ocean Wave Mesh
+      ctx.strokeStyle = "rgba(56, 189, 248, 0.16)";
+      ctx.lineWidth = 1;
+      const wStep = 2.5;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += wStep) {
+        ctx.beginPath();
+        let started = false;
+        for (let y = -ARENA_HALF; y <= ARENA_HALF; y += 1.2) {
+          const wz = sim.getWaveHeight(x, y, sim.time);
+          const pt = project3D(x, y, wz);
+          if (!pt) continue;
+          if (!started) { ctx.moveTo(pt.x, pt.y); started = true; }
+          else ctx.lineTo(pt.x, pt.y);
+        }
+        if (started) ctx.stroke();
+      }
+
+      requestAnimationFrame(render3D);
+    }
+
+    requestAnimationFrame(render3D);
+  </script>
+</body>
+</html>
