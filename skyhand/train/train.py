@@ -30,6 +30,7 @@ from ..env.core import make_env
 from .agent import Agent
 from .buffer import DemoStore, ReplayBuffer
 from .config import Config, tiny_config
+from .nets import sphere
 from .zsample import WorldZ
 
 EXPERT_ERRORS = (NotImplementedError, AttributeError, ImportError)
@@ -66,7 +67,10 @@ class Trainer:
         self.streams: List[_Stream] = []
         off = 0
         for i, sc in enumerate(scenes):
-            env = make_env(sc, cfg.num_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar, seed=cfg.seed + i)
+            env = make_env(sc, cfg.num_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar, seed=cfg.seed + i,
+                           domain_rand=cfg.domain_rand, rand_drone_dynamics=cfg.rand_drone_dynamics,
+                           enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
+                           enable_gusts=cfg.enable_gusts)
             wz = WorldZ(cfg.num_envs, self.agent.learner.zs, cfg.z_resample_steps, self.device)
             self.streams.append(_Stream(i, env, off, wz))
             off += cfg.num_envs
@@ -123,7 +127,11 @@ class Trainer:
             sc = st.env.scene
             if sc not in self.demo_envs:
                 self.demo_envs[sc] = make_env(sc, cfg.demo_envs, cfg.device, backend=cfg.backend,
-                                              lidar=False, seed=cfg.seed + 100 + st.idx)
+                                              lidar=False, seed=cfg.seed + 100 + st.idx,
+                                              domain_rand=cfg.domain_rand,
+                                              rand_drone_dynamics=cfg.rand_drone_dynamics,
+                                              enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
+                                              enable_gusts=cfg.enable_gusts)
             env = self.demo_envs[sc]
             obs = env.reset()
             gs, cuts = [], []
@@ -142,6 +150,46 @@ class Trainer:
                     env.reset(torch.nonzero(reset).squeeze(-1))
             added += self.demo.add_rollout(torch.stack(gs), torch.stack(cuts))
         return added
+
+    # -------------------------------------------------- evaluation
+    @torch.no_grad()
+    def evaluate(self, steps: Optional[int] = None) -> Dict[str, float]:
+        """Run evaluation rollouts on clean/configured eval environments."""
+        cfg = self.cfg
+        steps = steps or cfg.eval_steps
+        scenes = ["trash", "ocean"] if cfg.scene == "both" else [cfg.scene]
+        tot_col, tot_sh, tot_done, count = 0.0, 0.0, 0.0, 0
+        if not hasattr(self, "eval_envs"):
+            self.eval_envs = {}
+        for i, sc in enumerate(scenes):
+            if sc not in self.eval_envs:
+                self.eval_envs[sc] = make_env(
+                    sc, cfg.eval_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar,
+                    seed=cfg.seed + 500 + i,
+                    domain_rand=cfg.eval_domain_rand,
+                    rand_drone_dynamics=cfg.eval_rand_drone_dynamics,
+                    enable_wind=cfg.eval_enable_wind,
+                    dynamic_wind=cfg.eval_dynamic_wind,
+                    enable_gusts=cfg.eval_enable_gusts,
+                )
+            env = self.eval_envs[sc]
+            obs = env.reset()
+            # Fixed unit test z or uniform sphere
+            z = sphere(torch.randn(cfg.eval_envs, self.agent.d, device=self.device))
+            for _ in range(steps):
+                act = self.agent.act(obs, z, noise=0.0).to(env.device)
+                out = env.step(act)
+                reset = out.done | out.truncated
+                obs = env.reset(torch.nonzero(reset).squeeze(-1)) if reset.any() else out.obs
+                tot_col += out.events["collision"].float().mean().item()
+                tot_sh += out.events["shield"].float().mean().item()
+                tot_done += out.done.float().mean().item()
+                count += 1
+        return {
+            "eval_collision_rate": tot_col / max(count, 1),
+            "eval_shield_rate": tot_sh / max(count, 1),
+            "eval_done_rate": tot_done / max(count, 1),
+        }
 
     # -------------------------------------------------- learning
     def learn(self) -> Optional[Dict[str, float]]:
@@ -222,6 +270,9 @@ class Trainer:
                 self._acc_n += 1
             if cfg.demo_every and it % cfg.demo_every == 0:
                 self.collect_demos()
+            if cfg.eval_every and it % cfg.eval_every == 0:
+                eval_metrics = self.evaluate()
+                ev.update(eval_metrics)
             if cfg.log_every and it % cfg.log_every == 0:
                 self._log(ev)
             if cfg.save_every and it % cfg.save_every == 0:
@@ -259,6 +310,20 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
     p.add_argument("--no-lidar", action="store_true")
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--tiny", action="store_true", help="tiny networks for smoke tests")
+    p.add_argument("--no-domain-rand", action="store_true", help="globally disable domain randomisation")
+    p.add_argument("--no-rand-dynamics", action="store_true", help="disable drone dynamics (mass/drag) randomisation")
+    p.add_argument("--no-wind", action="store_true", help="disable ambient wind")
+    p.add_argument("--no-dynamic-wind", action="store_true", help="disable stochastic dynamic wind turbulence")
+    p.add_argument("--no-gusts", action="store_true", help="disable dynamic gusts")
+    p.add_argument("--eval-every", type=int, default=None, help="evaluation interval in iterations")
+    p.add_argument("--eval-envs", type=int, default=None, help="evaluation environments count")
+    p.add_argument("--eval-steps", type=int, default=None, help="evaluation steps count")
+    p.add_argument("--eval-domain-rand", action="store_true", help="enable domain randomisation during evaluation")
+    p.add_argument("--eval-rand-dynamics", action="store_true", help="enable drone dynamics randomisation during evaluation")
+    p.add_argument("--eval-wind", action="store_true", help="enable wind during evaluation")
+    p.add_argument("--eval-dynamic-wind", action="store_true", help="enable dynamic wind turbulence during evaluation")
+    p.add_argument("--eval-gusts", action="store_true", help="enable gusts during evaluation")
+    p.add_argument("--eval", default=None, metavar="CHECKPOINT", help="evaluate a trained agent checkpoint and exit")
     p.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
                    help="override any Config field, repeatable")
     a = p.parse_args(argv)
@@ -273,6 +338,33 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
             setattr(cfg, k, v)
     if a.no_lidar:
         cfg.lidar = False
+    if a.no_domain_rand:
+        cfg.domain_rand = False
+    if a.no_rand_dynamics:
+        cfg.rand_drone_dynamics = False
+    if a.no_wind:
+        cfg.enable_wind = False
+    if a.no_dynamic_wind:
+        cfg.dynamic_wind = False
+    if a.no_gusts:
+        cfg.enable_gusts = False
+
+    if a.eval_every is not None:
+        cfg.eval_every = a.eval_every
+    if a.eval_envs is not None:
+        cfg.eval_envs = a.eval_envs
+    if a.eval_steps is not None:
+        cfg.eval_steps = a.eval_steps
+    if a.eval_domain_rand:
+        cfg.eval_domain_rand = True
+    if a.eval_rand_dynamics:
+        cfg.eval_rand_drone_dynamics = True
+    if a.eval_wind:
+        cfg.eval_enable_wind = True
+    if a.eval_dynamic_wind:
+        cfg.eval_dynamic_wind = True
+    if a.eval_gusts:
+        cfg.eval_enable_gusts = True
     fmap = {f.name: f for f in dataclasses.fields(Config)}
     for kv in a.set:
         k, _, v = kv.partition("=")
@@ -286,7 +378,21 @@ def parse_args(argv: Optional[List[str]] = None) -> Config:
 
 
 def main(argv: Optional[List[str]] = None) -> str:
+    # Check if a standalone --eval flag was provided
+    raw_args = list(sys.argv[1:] if argv is None else argv)
+    eval_ckpt = None
+    if "--eval" in raw_args:
+        idx = raw_args.index("--eval")
+        if idx + 1 < len(raw_args):
+            eval_ckpt = raw_args[idx + 1]
     cfg = parse_args(argv)
+    if eval_ckpt is not None:
+        print(f"[eval] evaluating checkpoint: {eval_ckpt}", flush=True)
+        trainer = Trainer(cfg)
+        trainer.agent = Agent.load(eval_ckpt, device=cfg.device)
+        metrics = trainer.evaluate()
+        print("[eval] " + " ".join(f"{k}={v:.4g}" for k, v in metrics.items()), flush=True)
+        return eval_ckpt
     print(f"[train] method={cfg.method} scene={cfg.scene} backend={cfg.backend} envs={cfg.num_envs} "
           f"device={cfg.device} out={cfg.out}", flush=True)
     path = Trainer(cfg).run()

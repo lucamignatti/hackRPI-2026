@@ -249,3 +249,45 @@ def test_ocean_expert_grabs_corners():
         out = env.step(env.expert_action())
         grasp |= out.events["grasp"]
     assert grasp.float().mean() >= 0.6
+
+
+def test_disable_drone_dynamics_randomization():
+    env = make_env("trash", 8, lidar=False, domain_rand=True, rand_drone_dynamics=False)
+    env.reset()
+    assert torch.allclose(env.mass, torch.full_like(env.mass, spec.DRONE_MASS))
+    assert torch.allclose(env.drag, torch.full_like(env.drag, 0.35))
+
+
+def test_disable_wind_and_gusts():
+    # 1. No wind
+    env_nowind = make_env("trash", 8, lidar=False, domain_rand=True, enable_wind=False)
+    env_nowind.reset()
+    assert torch.allclose(env_nowind.wind_mean, torch.zeros_like(env_nowind.wind_mean))
+    assert torch.allclose(env_nowind.wind, torch.zeros_like(env_nowind.wind))
+    env_nowind.step(torch.zeros(8, 1, spec.ACTION_DIM))
+    assert torch.allclose(env_nowind.wind, torch.zeros_like(env_nowind.wind))
+
+    # 2. No dynamic wind turbulence (wind stays constant at wind_mean)
+    env_nodyn = make_env("trash", 8, lidar=False, domain_rand=True, enable_wind=True, dynamic_wind=False)
+    env_nodyn.reset()
+    w0 = env_nodyn.wind.clone()
+    for _ in range(5):
+        env_nodyn.step(torch.zeros(8, 1, spec.ACTION_DIM))
+    assert torch.allclose(env_nodyn.wind, w0, atol=1e-5)
+
+    # 3. No gusts (perturbation suppressed)
+    env_nogust = make_env("trash", 8, lidar=False, domain_rand=True, enable_gusts=False)
+    env_nogust.reset()
+    env_nogust.perturb(0, "gust", vec=[5.0, 0.0, 0.0], duration=2.0)
+    assert torch.allclose(env_nogust.gust, torch.zeros_like(env_nogust.gust))
+
+
+def test_global_domain_rand_disable():
+    env = make_env("trash", 8, lidar=False, domain_rand=False)
+    env.reset()
+    assert torch.allclose(env.mass, torch.full_like(env.mass, spec.DRONE_MASS))
+    assert torch.allclose(env.drag, torch.full_like(env.drag, 0.35))
+    assert torch.allclose(env.wind, torch.zeros_like(env.wind))
+    env.perturb(0, "gust", vec=[5.0, 0.0, 0.0])
+    assert torch.allclose(env.gust, torch.zeros_like(env.gust))
+

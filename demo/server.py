@@ -36,13 +36,15 @@ PERTURB_KINDS = ("drop_obstacle", "gust", "waves", "move_payload", "disable_dron
 MAX_EPISODE_STEPS = 2 * spec.EPISODE_STEPS          # 60 s of flight per approved mission
 
 
-def default_make_env(backend: str = "torch", device: str = "cpu", lidar: bool = True):
+def default_make_env(backend: str = "torch", device: str = "cpu", lidar: bool = True, **env_kw):
     from skyhand.env.core import make_env
 
     def mk(scene: str, num_envs: int, **kw):
-        kw.setdefault("lidar", lidar)
-        kw.setdefault("random_anchors", False)
-        return make_env(scene, num_envs=num_envs, device=device, backend=backend, **kw)
+        opts = dict(env_kw)
+        opts.update(kw)
+        opts.setdefault("lidar", lidar)
+        opts.setdefault("random_anchors", False)
+        return make_env(scene, num_envs=num_envs, device=device, backend=backend, **opts)
     return mk
 
 
@@ -452,6 +454,11 @@ def main(argv=None) -> None:
     ap.add_argument("--cem-candidates", type=int, default=64)
     ap.add_argument("--env-expert", action="store_true", help="fallback flies env.expert_action() instead of the built-in controller")
     ap.add_argument("--no-lidar", action="store_true")
+    ap.add_argument("--no-domain-rand", action="store_true", help="globally disable domain randomisation")
+    ap.add_argument("--no-rand-dynamics", action="store_true", help="disable drone dynamics randomisation")
+    ap.add_argument("--no-wind", action="store_true", help="disable ambient wind")
+    ap.add_argument("--no-dynamic-wind", action="store_true", help="disable dynamic stochastic wind turbulence")
+    ap.add_argument("--no-gusts", action="store_true", help="disable dynamic gusts")
     ap.add_argument("--speed", type=float, default=1.0, help="sim speed multiplier (1 = real time)")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args(argv)
@@ -460,7 +467,12 @@ def main(argv=None) -> None:
     agent = load_agent(args.checkpoint, args.device)
     pipe = Pipeline(agent=agent, device=args.device, use_env_expert=args.env_expert, cem=args.cem)
     num_envs = max(args.num_envs, args.cem_candidates + 1) if (args.cem and agent is not None) else args.num_envs
-    mk = default_make_env(args.backend, args.device, lidar=not args.no_lidar)
+    mk = default_make_env(args.backend, args.device, lidar=not args.no_lidar,
+                          domain_rand=not args.no_domain_rand,
+                          rand_drone_dynamics=not args.no_rand_dynamics,
+                          enable_wind=not args.no_wind,
+                          dynamic_wind=not args.no_dynamic_wind,
+                          enable_gusts=not args.no_gusts)
     session = DemoSession(args.scene, num_envs, pipeline=pipe, make_env=mk, seed=args.seed)
     log.info("policy: %s | mission compiler: %s | backend %s on %s | %d worlds",
              pipe.policy_mode, pipe.mission_mode, args.backend, args.device, num_envs)

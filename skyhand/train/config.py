@@ -61,6 +61,23 @@ class Config:
     pen_thrust: float = 0.5
     thrust_limit: float = 1.5          # collective / hover above this is penalised
 
+    # ------------------------------------------------------------ domain randomisation (training)
+    domain_rand: bool = True           # master switch for all domain randomisation
+    rand_drone_dynamics: bool = True   # drone mass and drag randomisation
+    enable_wind: bool = True           # ambient/mean wind in arena
+    dynamic_wind: bool = True          # dynamic stochastic wind turbulence
+    enable_gusts: bool = True          # dynamic gusts
+
+    # ------------------------------------------------------------ evaluation
+    eval_every: int = 0                # 0 = disabled, >0 = evaluate every N iterations
+    eval_envs: int = 16                # parallel evaluation worlds
+    eval_steps: int = 100              # steps per evaluation rollout
+    eval_domain_rand: bool = False     # master switch for domain randomisation during eval (clean by default)
+    eval_rand_drone_dynamics: bool = False # drone mass/drag randomisation during eval
+    eval_enable_wind: bool = False     # wind during eval
+    eval_dynamic_wind: bool = False    # dynamic wind turbulence during eval
+    eval_enable_gusts: bool = False    # gusts during eval
+
     # ------------------------------------------------------------ z sampling (PLAN 7.3)
     z_demo_frac: float = 0.5
     z_buffer_frac: float = 0.25

@@ -53,7 +53,11 @@ class EnvConfig:
     seed: int = 0
     lidar: bool = True              # False: skip scans, LiDAR images stay at "no return"
     shield: bool = True
-    domain_rand: bool = True
+    domain_rand: bool = True        # Master switch for all domain randomisation
+    rand_drone_dynamics: bool = True # Drone mass, drag and inertia/aerodynamic randomisation
+    enable_wind: bool = True        # Ambient/mean wind in the arena
+    dynamic_wind: bool = True       # Stochastic dynamic turbulence in wind
+    enable_gusts: bool = True       # Dynamic gusts in the arena
     random_anchors: bool = True     # pretraining: randomise anchors on reset
     cooler_prob: float = 0.3        # trash scene: payload is a cooler with this probability
     nofly_prob: float = 0.5
@@ -372,14 +376,16 @@ class SkyEnv:
 
     def _reset_worlds(self, ids: torch.Tensor, m: int, a: int) -> None:
         dr = self.cfg.domain_rand
+        rand_drone = dr and self.cfg.rand_drone_dynamics
+        wind_active = dr and self.cfg.enable_wind
         H = spec.ARENA_HALF
         self.t[ids] = 0.0
         self.steps[ids] = 0
         self.vel[ids] = 0.0
         self.ang[ids] = 0.0
         self.quat[ids] = quat_from_yaw((self._rand(m, a) - 0.5) * 2 * math.pi)
-        self.mass[ids] = spec.DRONE_MASS * (1.0 + (0.2 * (self._rand(m, a) - 0.5) if dr else 0.0))
-        self.drag[ids] = 0.35 * (1.0 + (0.4 * (self._rand(m, a) - 0.5) if dr else 0.0))
+        self.mass[ids] = spec.DRONE_MASS * (1.0 + (0.2 * (self._rand(m, a) - 0.5) if rand_drone else 0.0))
+        self.drag[ids] = 0.35 * (1.0 + (0.4 * (self._rand(m, a) - 0.5) if rand_drone else 0.0))
         self.alive[ids] = True
         self.grip[ids] = False
         self.holding[ids] = -1
@@ -395,7 +401,7 @@ class SkyEnv:
         self.shield_count[ids] = 0
         ang = self._rand(m) * 2 * math.pi
         self.wind_mean[ids] = torch.stack([torch.cos(ang), torch.sin(ang), torch.zeros_like(ang)], -1) * \
-            (self._rand(m, 1) * self.cfg.max_wind if dr else 0.0)
+            (self._rand(m, 1) * self.cfg.max_wind if wind_active else 0.0)
         self.wind[ids] = self.wind_mean[ids]
         self.gust[ids] = 0.0
         self.gust_time[ids] = 0.0
@@ -577,11 +583,24 @@ class SkyEnv:
         self.box_c[..., :2] = torch.where(mv, tgt, self.box_c[..., :2])
 
     def _update_wind(self, dt: float) -> None:
-        theta, sigma = 0.5, 0.8 if self.cfg.domain_rand else 0.0
-        self.wind = self.wind + theta * (self.wind_mean - self.wind) * dt + \
-            sigma * math.sqrt(dt) * self._randn(self.num_envs, 3) * torch.tensor([1.0, 1.0, 0.2], device=self.device)
+        dr = self.cfg.domain_rand
+        wind_active = dr and self.cfg.enable_wind
+        dyn_wind = wind_active and self.cfg.dynamic_wind
+        gusts_active = dr and self.cfg.enable_gusts
+        if not wind_active:
+            self.wind.zero_()
+            self.wind_mean.zero_()
+        else:
+            theta = 0.5
+            sigma = 0.8 if dyn_wind else 0.0
+            self.wind = self.wind + theta * (self.wind_mean - self.wind) * dt + \
+                sigma * math.sqrt(dt) * self._randn(self.num_envs, 3) * torch.tensor([1.0, 1.0, 0.2], device=self.device)
         self.gust_time = (self.gust_time - dt).clamp_min(0.0)
-        self.gust = torch.where((self.gust_time > 0).unsqueeze(-1), self.gust, torch.zeros_like(self.gust))
+        if gusts_active:
+            self.gust = torch.where((self.gust_time > 0).unsqueeze(-1), self.gust, torch.zeros_like(self.gust))
+        else:
+            self.gust.zero_()
+            self.gust_time.zero_()
 
     def _payload_substep(self, dt: float) -> None:
         held = self.pl_held_by >= 0
@@ -1001,6 +1020,8 @@ class SkyEnv:
             self.box_c[i, b] = torch.cat([p, torch.tensor([float(base) + half], device=dev)])
             self.box_active[i, b] = True
         elif kind == "gust":
+            if not (self.cfg.domain_rand and self.cfg.enable_gusts):
+                return
             v = torch.tensor(kw.get("vec", [4.0, 0.0, 0.0]), dtype=torch.float32, device=dev)
             self.gust[i] = v
             self.gust_time[i] = float(kw.get("duration", 2.0))

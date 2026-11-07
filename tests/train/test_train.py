@@ -386,6 +386,41 @@ def test_train_without_expert(tmp_path, monkeypatch):
     assert os.path.exists(path)
 
 
+def test_cli_flags_disable_dynamics_and_wind():
+    from skyhand.train.train import parse_args
+    cfg = parse_args(["--tiny", "--no-domain-rand", "--no-rand-dynamics", "--no-wind",
+                      "--no-dynamic-wind", "--no-gusts", "--eval-every", "10",
+                      "--eval-envs", "4", "--eval-steps", "20", "--eval-domain-rand",
+                      "--eval-rand-dynamics", "--eval-wind", "--eval-dynamic-wind", "--eval-gusts"])
+    assert cfg.domain_rand is False
+    assert cfg.rand_drone_dynamics is False
+    assert cfg.enable_wind is False
+    assert cfg.dynamic_wind is False
+    assert cfg.enable_gusts is False
+    assert cfg.eval_every == 10
+    assert cfg.eval_envs == 4
+    assert cfg.eval_steps == 20
+    assert cfg.eval_domain_rand is True
+    assert cfg.eval_rand_drone_dynamics is True
+    assert cfg.eval_enable_wind is True
+    assert cfg.eval_dynamic_wind is True
+    assert cfg.eval_enable_gusts is True
+
+
+def test_trainer_evaluation_and_cli_eval(tmp_path):
+    from skyhand.train.train import Trainer, main
+    cfg = tiny_config(scene="trash", num_envs=2, steps=2, out=str(tmp_path / "eval_run"),
+                      eval_every=1, eval_envs=2, eval_steps=2)
+    trainer = Trainer(cfg)
+    m = trainer.evaluate(steps=2)
+    assert "eval_collision_rate" in m
+    assert "eval_shield_rate" in m
+    assert "eval_done_rate" in m
+    p = trainer.save()
+    res = main(["--tiny", "--eval", p, "--device", "cpu"])
+    assert res == p
+
+
 # ============================================================ py39 / minimal-deps compatibility
 def test_py39_compat_and_no_genesis():
     files = sorted(TRAIN_DIR.glob("*.py"))
