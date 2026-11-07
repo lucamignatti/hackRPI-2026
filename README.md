@@ -156,6 +156,7 @@ Spend the first 30 minutes reading these as a group, in this order:
 
 **Environments**
 - Grasping is simplified: a handle within reach and the gripper closing counts as a grab.
+- Anchors are 4 fixed slots per drone. A slot can be a selector such as `nearest:trash`, re-resolved every step, which is how "clear all the trash" runs as one mission. `anchor_active` flags in the goal space mark unused slots.
 - Ocean physics is tuned for a proof of concept: a light net, shallow fish schools, and caught fish riding with the net.
 - Every world has its own terrain, buildings, trees, and items, which a Genesis scene cannot represent, so the Genesis backend only integrates drone rigid bodies. World geometry, contacts, and the LiDAR are shared torch code in both backends.
 - Terrain LiDAR uses Lipschitz-bounded ray marching. It costs most of the env step time when LiDAR is on; measure it at training scale.

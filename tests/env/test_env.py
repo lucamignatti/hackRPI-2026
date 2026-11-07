@@ -570,3 +570,80 @@ def test_world_expert_team_grabs_net():
         out = env.step(env.expert_action())
         grasp |= out.events["grasp"]
     assert grasp.float().mean() >= 0.8
+
+
+# ---------------------------------------------------------------- anchor selectors and active flags
+def _active(env):
+    return env.observe()["g"][..., spec.G_SLICES["anchor_active"]]
+
+
+def test_anchor_active_flags_mark_unused_slots():
+    env = make_env("trash", 1, lidar=False, random_anchors=False)
+    k = first_item(env, 0)
+    env.bind_anchors([0], [AnchorBinding("handle", entity=f"item_{k}.handle"), AnchorBinding("zone", entity="bin")])
+    assert _active(env)[0, 0].tolist() == [1.0, 1.0, 0.0, 0.0]
+    env.bind_anchors([0], [AnchorBinding("point", point=tuple(env.pos[0, 0].tolist()))])
+    act = _active(env)[0, 0]
+    assert act.tolist() == [1.0, 0.0, 0.0, 0.0]                         # an anchor at the drone is still "in use"
+
+
+def test_nearest_trash_selector_targets_closest_trash_and_sticks_when_held():
+    env = make_env("trash", 1, lidar=False, shield=False, city_prob=0.0, random_anchors=False)
+    clear_world(env, 0)
+    env.bind_anchors([0], [AnchorBinding("handle", entity="nearest:trash"), AnchorBinding("zone", entity="bin")])
+    trash = env.it_active[0] & env.catalog.is_trash[env.it_type[0]]
+    d = (env.item_handles()[0] - env.pos[0, 0]).norm(dim=-1)
+    want = int(torch.where(trash, d, torch.full_like(d, 1e9)).argmin())
+    assert int(env.anchor_item()[0, 0]) == want
+    apos, _, akind = env.anchor_positions()
+    assert torch.allclose(apos[0, 0, 0], env.item_handles()[0, want]) and int(akind[0, 0, 0]) == 2
+    # grab it and fly next to a different trash item: the selector stays on the carried one
+    env.pos[0, 0] = env.item_handles()[0, want] - torch.tensor(spec.GRIPPER_OFFSET)
+    act = zeros(env)
+    act[..., 4] = 1.0
+    env.step(act)
+    other = next(j for j in range(spec.MAX_ITEMS) if j != want and bool(trash[j]))
+    env.pos[0, 0, :2] = env.it_pos[0, other, :2]
+    assert int(env.anchor_item()[0, 0]) == want
+
+
+def test_selector_with_nothing_left_reads_as_unused():
+    env = make_env("trash", 1, lidar=False, random_anchors=False)
+    env.bind_anchors([0], [AnchorBinding("handle", entity="nearest:trash")])
+    assert float(_active(env)[0, 0, 0]) == 1.0
+    env.it_active[0] &= ~env.catalog.is_trash[env.it_type[0]]          # all trash gone
+    assert float(_active(env)[0, 0, 0]) == 0.0
+    _, _, akind = env.anchor_positions()
+    assert int(akind[0, 0, 0]) == 0
+
+
+def test_type_selector_only_matches_that_type():
+    env = make_env("trash", 6, lidar=False, city_prob=0.0, random_anchors=False, seed=2)
+    env.bind_anchors(torch.arange(6), [AnchorBinding("handle", entity="nearest:pizza_box")])
+    it = env.anchor_item()[:, 0]
+    has = (env.it_active & (env.it_type == env.catalog.id("pizza_box"))).any(-1)
+    for i in range(6):
+        if bool(has[i]):
+            assert int(env.it_type[i, int(it[i])]) == env.catalog.id("pizza_box")
+        else:
+            assert int(it[i]) == -1
+
+
+def test_net_corner_selector_skips_corners_held_by_teammates():
+    env = make_env("ocean", 1, lidar=False, random_anchors=False)
+    env.bind_anchors([0], [AnchorBinding("handle", entity="nearest:net_corner")], agent=1)
+    env.pos[0, 1, :2] = env.net_handles()[0, 0, :2]                     # drone 1 sits over corner 0
+    assert int(env.anchor_handle()[0, 1]) == env.corner_offset + 0
+    env.corner_held_by[0, 0] = 0                                         # but drone 0 holds it
+    env.holding[0, 0] = env.corner_offset + 0
+    assert int(env.anchor_handle()[0, 1]) != env.corner_offset + 0
+    env.bind_anchors([0], [AnchorBinding("point", entity="nearest:animal")], agent=2)
+    apos, _, _ = env.anchor_positions()
+    d = (env.animals.pos[0] - env.pos[0, 2]).norm(dim=-1)
+    assert torch.allclose(apos[0, 2, 0], env.animals.pos[0, int(d.argmin())])
+
+
+def test_pretraining_uses_selectors():
+    env = make_env("world", 64, lidar=False, seed=0)
+    assert bool((env.anc_sel > 0).any())
+    spec.check_obs(env.observe(), 64, env.num_agents)

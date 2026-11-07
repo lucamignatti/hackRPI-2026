@@ -181,6 +181,8 @@ def _land(env) -> torch.Tensor:
     ph = torch.where((ph == 4) & (xy(pos, dest) < 0.4), torch.full_like(ph, 5), ph)
     ph = torch.where((ph == 5) & ((pos[..., 2] - release_z).abs() < 0.15) & (speed < 0.4), torch.full_like(ph, 6), ph)
     ph = torch.where((ph == 6) & ~holding, torch.full_like(ph, 7), ph)
+    # a selector anchor ("nearest:trash") has moved on to the next item: start the next pickup
+    ph = torch.where((ph == 7) & pick & ~holding, torch.zeros_like(ph), ph)
     lost = (ph >= 3) & (ph <= 5) & ~holding
     ph = torch.where(lost, torch.zeros_like(ph), ph)
     ph = torch.where(~pick & (ph < 6), torch.full_like(ph, 8), ph)
@@ -230,7 +232,7 @@ def _ocean(env, team: torch.Tensor) -> torch.Tensor:
     cvel = env.net.vel[:, env.net.corners]
     names = env.entity_names()
     first_corner = names.index("net.corner_0")
-    src0 = env.anc_src[..., 0]
+    src0 = env.anchor_src()[..., 0]
     is_corner = (src0 >= first_corner) & (src0 < first_corner + 4)
     default = torch.arange(a, device=dev).expand(n, a) % 4
     cidx = torch.where(is_corner, src0 - first_corner, default)

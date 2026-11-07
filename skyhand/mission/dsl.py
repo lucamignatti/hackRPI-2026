@@ -122,6 +122,7 @@ FUNCTIONS: Dict[str, str] = {
     "dy": "dy(p, q): q.y - p.y",
     "dz": "dz(p, q): q.z - p.z (signed, up positive)",
     "inside": "inside(ak): 1 if the drone is inside anchor k's zone (zones) or within 0.5 m (points)",
+    "active": "active(ak): 1 if anchor k is in use (an unused slot, or a selector like nearest:trash with nothing left, is 0)",
     "abs": "abs(x)",
     "min": "min(x, y, ...): elementwise min of 2+ args",
     "max": "max(x, y, ...): elementwise max of 2+ args",
@@ -347,13 +348,13 @@ class _Compiler:
                 return lambda g: rel(g)[..., :2].norm(dim=-1)
             idx = {"dx": 0, "dy": 1, "dz": 2}[fname]
             return lambda g: rel(g)[..., idx]
-        if fname == "inside":
+        if fname in ("inside", "active"):
             need(1)
             a = args[0]
             if not (isinstance(a, ast.Name) and a.id in POINTS and a.id.startswith("a") and a.id[1:].isdigit()):
-                raise self.err(node, "inside() takes an anchor a0..a%d" % (spec.N_ANCHORS - 1))
+                raise self.err(node, "%s() takes an anchor a0..a%d" % (fname, spec.N_ANCHORS - 1))
             self.names.add(a.id)
-            col = spec.G_SLICES["anchor_inside"].start + int(a.id[1:])
+            col = spec.G_SLICES["anchor_" + fname].start + int(a.id[1:])
             return lambda g: g[..., col]
         if fname == "payload_is":
             need(1)

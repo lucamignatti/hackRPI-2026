@@ -112,6 +112,8 @@ def infer_kind(entity: str) -> str:
 
     ".handle" names and net.corner_i -> handle; bin, boat, pad_*, nofly_* -> zone; everything else -> point.
     """
+    if entity in S.SELECTOR_KIND:
+        return S.SELECTOR_KIND[entity]
     if entity.endswith(".handle") or re.fullmatch(r"net\.corner_(\d+|\{agent\})", entity):
         return "handle"
     if entity in ("bin", "boat") or entity.startswith("nofly") or entity.startswith("pad_"):
@@ -164,6 +166,11 @@ def resolve_entity(name: str, entities: Sequence[str], agent: int = 0, scene: Op
     concrete = name.replace("{agent}", str(agent))
     if concrete in entities:
         return concrete
+    sel = re.sub(r"^(?:the_)?(?:nearest|closest)[_:\s]+(?:the_)?", "nearest:", re.sub(r"[\s\-]+", "_", concrete.strip().lower()))
+    sel = {"nearest:corner": "nearest:net_corner", "nearest:school": "nearest:fish_school",
+           "nearest:bag": "nearest:trash_bag"}.get(sel, sel)
+    if sel in S.SELECTOR_KIND:                     # "nearest:trash", "closest pizza box", ...
+        return sel
     alias = _alias(concrete, entities, scene)
     if alias is not None:
         return alias

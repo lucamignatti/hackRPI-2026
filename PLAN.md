@@ -128,6 +128,8 @@ The scenes were rebuilt; skyhand/spec.py and README.md are the current reference
 - **Team:** 3 or 4 drones per world, each a separate entity in the same Genesis scene.
 
 ### 5.6 Anchors: how a task points at the world
+**Update (Sat evening):** anchors stay a fixed set of 4 slots per drone. A slot can name a fixed entity, a point, or a *selector* such as `nearest:trash`, `nearest:pizza_box`, `nearest:net_corner`, `nearest:fish_school`, or `nearest:animal`, which resolves every step to the closest match (and stays on an item while it is carried). Variable numbers of objects are handled this way and by the nearest-entity tokens, not by a variable slot count, which would break B's fixed input, bias the buffer average that gives z, and blow up pretraining coverage. The goal space has an `anchor_active` flag per slot, so an unused slot is no longer indistinguishable from an anchor at the drone; reward programs can read it with `active(ak)`.
+
 Each world exposes **K = 4 anchors**: points or regions the task cares about, such as "the handle to grab", "where to deliver", and "the zone to avoid". Anchors are part of the observation. During pretraining they are bound at random each episode to random objects and free-space points. At test time the language layer binds them to named scene objects.
 
 ### 5.7 Safety shield

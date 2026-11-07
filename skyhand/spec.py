@@ -151,6 +151,8 @@ _G_FIELDS = [
     ("anchor_rel_drone", 3 * N_ANCHORS, 25.0),    # anchor k position minus drone position
     ("anchor_rel_payload", 3 * N_ANCHORS, 25.0),  # anchor k position minus payload position
     ("anchor_inside", N_ANCHORS, 1.0),            # drone inside anchor k zone
+    ("anchor_active", N_ANCHORS, 1.0),            # 1 if anchor k is in use (an unused or unmatched slot reads
+                                                  # as zero offsets, indistinguishable from an anchor at the drone)
     ("obstacle_dist", 1, 10.0),    # distance from drone surface to nearest obstacle
     ("obstacle_closing", 1, 6.0),  # closing speed toward it (positive = approaching)
     ("trash_left", 1, 1.0),        # fraction of this world's trash not yet delivered (trash scene)
@@ -237,12 +239,23 @@ class StepOut:
 
 
 # ---------------------------------------------------------------- anchor binding
+# Selector anchors: instead of one fixed entity, an anchor can name a kind of thing and
+# resolve every step to the closest one to its drone. Item selectors stick with the item
+# the drone is holding; the net-corner selector skips corners other drones hold. A
+# selector with nothing left to match (e.g. no trash remains) reads as an unused slot.
+ANCHOR_SELECTORS = (("nearest:trash", "handle"), ("nearest:item", "handle")) + \
+    tuple((f"nearest:{t}", "handle") for t in ITEM_TYPES) + \
+    (("nearest:net_corner", "handle"), ("nearest:fish_school", "point"), ("nearest:animal", "point"))
+SELECTOR_KIND = dict(ANCHOR_SELECTORS)
+
+
 @dataclass
 class AnchorBinding:
     """What anchor k points at. Exactly one of entity / point is set.
 
-    entity: a name from env.entity_names(), e.g. "bag.handle", "bin", "boat",
-            "nofly_0", "net.corner_2", "fish_school_0".
+    entity: a name from env.entity_names(), e.g. "item_3.handle", "bin", "boat",
+            "nofly_0", "net.corner_2", "fish_school_0", or a selector from
+            ANCHOR_SELECTORS such as "nearest:trash".
     point:  fixed world point (x, y, z).
     radius: zone radius in metres (0 = plain point).
     kind:   one of ANCHOR_TYPES.

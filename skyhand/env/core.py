@@ -180,7 +180,8 @@ class SkyEnv:
         # anchors
         K = spec.N_ANCHORS
         self.anc_kind = zl(n, a, K)
-        self.anc_src = zl(n, a, K, v=-1)
+        self.anc_src = zl(n, a, K, v=-1)              # fixed entity index, or -1
+        self.anc_sel = zl(n, a, K)                    # selector id (1 + index into spec.ANCHOR_SELECTORS), 0 = none
         self.anc_point, self.anc_radius = zf(n, a, K, 3), zf(n, a, K)
         # expert
         self.exp_phase = zl(n, a)
@@ -292,6 +293,22 @@ class SkyEnv:
                                          for nm in names], device=self.device)
         self._ent_is_handle = torch.tensor([nm.endswith(".handle") for nm in names], device=self.device)
         self._ent_zone = [ZS.get(nm) for nm in names]
+        # selector candidates: entity indices each selector chooses among (empty if the scene has none)
+        idx = lambda pred: torch.tensor([e for e, nm in enumerate(names) if pred(nm)], dtype=torch.long, device=self.device)
+        handles = lambda nm: nm.startswith("item_") and nm.endswith(".handle")
+        animals = set(self.animals.names) if self.animals is not None else set()
+        cands = {"nearest:trash": idx(handles), "nearest:item": idx(handles),
+                 "nearest:net_corner": idx(lambda nm: nm.startswith("net.corner_")),
+                 "nearest:fish_school": idx(lambda nm: nm.startswith("fish_school_")),
+                 "nearest:animal": idx(lambda nm: nm in animals)}
+        for t in spec.ITEM_TYPES:
+            cands[f"nearest:{t}"] = idx(handles)
+        self._selectors = [(sel, cands[sel]) for sel, _ in spec.ANCHOR_SELECTORS]
+        self._sel_id = {sel: i + 1 for i, (sel, _) in enumerate(spec.ANCHOR_SELECTORS)}
+        self._item_handle_ent = torch.tensor([names.index(f"item_{k}.handle") if f"item_{k}.handle" in names else -1
+                                              for k in range(spec.MAX_ITEMS)], device=self.device)
+        self._corner_ent = torch.tensor([names.index(f"net.corner_{c}") if f"net.corner_{c}" in names else -1
+                                         for c in range(4)], device=self.device)
 
     def entity_names(self) -> List[str]:
         return list(self._ent_names)
@@ -428,9 +445,20 @@ class SkyEnv:
         if self.waves is not None:
             ground = torch.zeros_like(ground)
         pt = torch.cat([xy, (ground + 1.5 + 3.0 * self._rand(m, a, K)).unsqueeze(-1)], -1)
+        # selector anchors, so the policy learns "the closest one of a kind"
+        sel = torch.zeros((m, a, K), dtype=torch.long, device=self.device)
+        if self.has_items:
+            sel[..., 0] = torch.where(use(0.25), self._sel_id["nearest:trash"], sel[..., 0])
+        if self.has_net:
+            sel[..., 2] = torch.where(use(0.3), self._sel_id["nearest:animal"], sel[..., 2])
+            sel[..., 3] = torch.where(use(0.2), self._sel_id["nearest:fish_school"], sel[..., 3])
+        src = torch.where(sel > 0, torch.full_like(src, -1), src)
         self.anc_src[env_ids] = src
+        self.anc_sel[env_ids] = sel
         self.anc_point[env_ids] = pt
-        self.anc_kind[env_ids] = torch.where(src >= 0, kinds[src.clamp_min(0)], torch.full_like(src, ANCHOR_KIND["point"]))
+        sel_kind = torch.tensor([ANCHOR_KIND["none"]] + [ANCHOR_KIND[k] for _, k in spec.ANCHOR_SELECTORS], device=self.device)
+        self.anc_kind[env_ids] = torch.where(sel > 0, sel_kind[sel],
+                                             torch.where(src >= 0, kinds[src.clamp_min(0)], torch.full_like(src, ANCHOR_KIND["point"])))
         self.anc_radius[env_ids] = 0.0
 
     def bind_anchors(self, env_ids, bindings: List[AnchorBinding], agent: Optional[int] = None) -> None:
@@ -439,15 +467,23 @@ class SkyEnv:
         for k in range(spec.N_ANCHORS):
             b = bindings[k] if k < len(bindings) else None
             for ag in agents:
+                self.anc_sel[env_ids, ag, k] = 0
                 if b is None or b.kind == "none":
                     self.anc_src[env_ids, ag, k] = -1
                     self.anc_kind[env_ids, ag, k] = ANCHOR_KIND["none"]
                     self.anc_point[env_ids, ag, k] = 0.0
                     self.anc_radius[env_ids, ag, k] = 0.0
                     continue
-                if b.entity is not None:
+                if b.entity is not None and b.entity in self._sel_id:
+                    self.anc_src[env_ids, ag, k] = -1
+                    self.anc_sel[env_ids, ag, k] = self._sel_id[b.entity]
+                    kind = b.kind if b.kind in ("handle", "point", "zone") else spec.SELECTOR_KIND[b.entity]
+                    if kind == "point" and spec.SELECTOR_KIND[b.entity] == "handle":
+                        kind = "handle"
+                elif b.entity is not None:
                     if b.entity not in self._ent_names:
-                        raise KeyError(f"unknown entity {b.entity!r}; known: {self._ent_names}")
+                        raise KeyError(f"unknown entity {b.entity!r}; known: {self._ent_names} "
+                                       f"and selectors {list(self._sel_id)}")
                     idx = self._ent_names.index(b.entity)
                     self.anc_src[env_ids, ag, k] = idx
                     kind = b.kind if b.kind in ANCHOR_KIND else spec.ANCHOR_TYPES[int(self._ent_kind[idx])]
@@ -459,34 +495,85 @@ class SkyEnv:
                 self.anc_kind[env_ids, ag, k] = ANCHOR_KIND[kind]
                 self.anc_radius[env_ids, ag, k] = float(b.radius)
 
+    def anchor_src(self, ent: Optional[torch.Tensor] = None, act: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """[N, A, K] entity index each anchor points at this step: the fixed binding, or the
+        closest valid match for a selector (-1 for a point anchor or an unmatched selector)."""
+        src = self.anc_src
+        if not bool((self.anc_sel > 0).any()):
+            return src
+        n, a, K = src.shape
+        ent = self._entity_positions() if ent is None else ent
+        act = self._entity_active() if act is None else act
+        out = src.clone()
+        off = self.corner_offset
+        held_item = (self.holding >= 0) & (self.holding < off) if self.has_items else torch.zeros_like(self.holding, dtype=torch.bool)
+        held_corner = self.holding >= off if self.has_net else torch.zeros_like(held_item)
+        for sid, (sel, cand) in enumerate(self._selectors, start=1):
+            m = self.anc_sel == sid
+            if not bool(m.any()):
+                continue
+            if cand.numel() == 0:
+                out = torch.where(m, torch.full_like(out, -1), out)
+                continue
+            valid = act[:, cand].unsqueeze(1).expand(n, a, -1).clone()               # [N, A, C]
+            sticky = torch.full((n, a), -1, dtype=torch.long, device=self.device)
+            if sel.startswith("nearest:") and sel not in ("nearest:net_corner", "nearest:fish_school", "nearest:animal"):
+                it = self._ent_item[cand].clamp_min(0)                                # item index of each candidate
+                typ = self.it_type[:, it]                                             # [N, C]
+                if sel == "nearest:trash":
+                    ok = self.catalog.is_trash[typ]
+                elif sel == "nearest:item":
+                    ok = torch.ones_like(typ, dtype=torch.bool)
+                else:
+                    ok = typ == self.catalog.id(sel.split(":", 1)[1])
+                valid &= ok.unsqueeze(1)
+                hk = self.holding.clamp(0, spec.MAX_ITEMS - 1)
+                h_ok = held_item & torch.gather(ok, 1, hk)
+                sticky = torch.where(h_ok, self._item_handle_ent[hk], sticky)
+            elif sel == "nearest:net_corner":
+                free = (self.corner_held_by < 0).unsqueeze(1) | \
+                    (self.corner_held_by.unsqueeze(1) == torch.arange(a, device=self.device).view(1, a, 1))
+                valid &= free
+                sticky = torch.where(held_corner, self._corner_ent[(self.holding - off).clamp(0, 3)], sticky)
+            d = (self.pos[:, :, None] - ent[:, cand][:, None]).norm(dim=-1)
+            d = torch.where(valid, d, torch.full_like(d, FAR))
+            best = torch.where(valid.any(-1), cand[d.argmin(-1)], torch.full((n, a), -1, dtype=torch.long, device=self.device))
+            choose = torch.where(sticky >= 0, sticky, best)
+            out = torch.where(m, choose.unsqueeze(-1).expand(n, a, K), out)
+        return out
+
     def anchor_positions(self):
-        """(pos [N, A, K, 3], radius [N, A, K], kind [N, A, K])."""
+        """(pos [N, A, K, 3], radius [N, A, K], kind [N, A, K]). Unused slots and selectors
+        with nothing to match report kind 'none' and the drone's own position."""
         ent = self._entity_positions()
         er = self._entity_radius()
-        n, a, K = self.anc_src.shape
-        src = self.anc_src.clamp_min(0)
+        src_eff = self.anchor_src(ent)
+        n, a, K = src_eff.shape
+        src = src_eff.clamp_min(0)
         gpos = torch.gather(ent[:, None].expand(n, a, -1, 3), 2, src.unsqueeze(-1).expand(n, a, K, 3))
         grad = torch.gather(er[:, None].expand(n, a, -1), 2, src)
-        bound = self.anc_src >= 0
+        bound = src_eff >= 0
         pos = torch.where(bound.unsqueeze(-1), gpos, self.anc_point)
         rad = torch.where(bound & (self.anc_radius == 0), grad, self.anc_radius)
-        none = self.anc_kind == ANCHOR_KIND["none"]
+        kind = torch.where((self.anc_sel > 0) & ~bound, torch.full_like(self.anc_kind, ANCHOR_KIND["none"]), self.anc_kind)
+        none = kind == ANCHOR_KIND["none"]
         pos = torch.where(none.unsqueeze(-1), self.pos.unsqueeze(2).expand_as(pos), pos)
-        return pos, rad, self.anc_kind
+        return pos, rad, kind
 
     def anchor_item(self) -> torch.Tensor:
-        """[N, A] item index bound to anchor 0 (its item or its handle), else -1."""
-        src = self.anc_src[..., 0]
+        """[N, A] item index anchor 0 points at this step (its item or its handle), else -1."""
+        src = self.anchor_src()[..., 0]
         it = self._ent_item[src.clamp_min(0)]
         return torch.where(src >= 0, it, torch.full_like(src, -1))
 
     def anchor_handle(self) -> torch.Tensor:
-        """[N, A] handle-table index bound to anchor 0: an item (its index) or a net corner
-        (corner_offset + c); -1 otherwise."""
-        src = self.anc_src[..., 0].clamp_min(0)
+        """[N, A] handle-table index anchor 0 points at this step: an item (its index) or a net
+        corner (corner_offset + c); -1 otherwise."""
+        srcf = self.anchor_src()[..., 0]
+        src = srcf.clamp_min(0)
         it, co = self._ent_item[src], self._ent_corner[src]
         h = torch.where(it >= 0, it, torch.where(co >= 0, co + self.corner_offset, torch.full_like(it, -1)))
-        return torch.where(self.anc_src[..., 0] >= 0, h, torch.full_like(h, -1))
+        return torch.where(srcf >= 0, h, torch.full_like(h, -1))
 
     # ================================================================ reset
     def reset(self, env_ids: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
@@ -1110,6 +1197,7 @@ class SkyEnv:
         obs["proprio"] = torch.cat([self.vel, grav_b, self.ang, self.grip.float().unsqueeze(-1),
                                     holding.unsqueeze(-1), height.unsqueeze(-1), self.last_action], -1)
         apos, arad, akind = self.anchor_positions()
+        self._anchor_kind_now = akind
         inside = self._anchor_inside(apos, arad, akind)
         onehot = torch.nn.functional.one_hot(akind, len(spec.ANCHOR_TYPES)).float()
         obs["anchors"] = torch.cat([apos - self.pos.unsqueeze(2), onehot, arad.unsqueeze(-1), inside.float().unsqueeze(-1)], -1)
@@ -1255,6 +1343,7 @@ class SkyEnv:
         g[..., Sl["anchor_rel_drone"]] = (apos - self.pos.unsqueeze(2)).reshape(n, a, -1)
         g[..., Sl["anchor_rel_payload"]] = (apos - ppos.unsqueeze(2)).reshape(n, a, -1)
         g[..., Sl["anchor_inside"]] = inside.float()
+        g[..., Sl["anchor_active"]] = (self._anchor_kind_now != ANCHOR_KIND["none"]).float()
         # nearest obstacle (boxes and spheres)
         rel = self.pos[:, :, None] - self.box_c[:, None]
         closest = torch.maximum(torch.minimum(rel, self.box_h[:, None]), -self.box_h[:, None])
@@ -1291,7 +1380,7 @@ class SkyEnv:
               "orb_w", "orb_ph", "zone_c", "zone_r", "zone_drop_h", "zone_active", "zone_kind",
               "it_type", "it_active", "it_delivered", "it_pos", "it_vel", "it_half", "it_sphere", "it_mass",
               "it_held_by", "trash_init", "turbidity", "net_stretch", "fish_frac", "bycatch", "animal_gap",
-              "corner_held_by", "anc_kind", "anc_src", "anc_point", "anc_radius", "exp_phase", "exp_cruise",
+              "corner_held_by", "anc_kind", "anc_src", "anc_sel", "anc_point", "anc_radius", "exp_phase", "exp_cruise",
               "_lidar", "_lidar_down")
     _SUBS = ("terrain", "waves", "net", "fish", "animals")
 

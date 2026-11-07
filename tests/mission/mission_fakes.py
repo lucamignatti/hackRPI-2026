@@ -156,7 +156,7 @@ class FakeEnv:
         assert len(bindings) == spec.N_ANCHORS
         for b in bindings:
             assert b.kind in spec.ANCHOR_TYPES
-            assert b.entity is None or b.entity in self._ents, b.entity
+            assert b.entity is None or b.entity in self._ents or b.entity in spec.SELECTOR_KIND, b.entity
         self.bound[0 if agent is None else int(agent)] = list(bindings)
 
     def step(self, actions):

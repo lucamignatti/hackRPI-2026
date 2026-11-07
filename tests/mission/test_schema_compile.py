@@ -286,32 +286,43 @@ def test_offline_trash_avoid_carts_and_nofly():
 
 @pytest.mark.parametrize("text", ["clear the trash pile", "pick up all the trash", "clean up the street"])
 def test_offline_pile_multi_step(text):
+    """'All the trash' is one mission whose a0 is the selector nearest:trash: it re-targets to the
+    closest remaining trash every step, so no per-item steps are needed."""
     ms, env = _check_offline("trash", TRASH, text)
-    order = [st.anchors["a0"] for st in ms.steps]
-    # trash only (backpack item_1, flower_pot item_5 and inactive item_6..9 skipped), nearest first:
-    # item_2 is nearest the drone, then by distance to the truck: item_3, item_0, item_4
-    assert order == ["item_2.handle", "item_3.handle", "item_0.handle", "item_4.handle"]
-    assert all(st.anchors["a1"] == "bin" for st in ms.steps)
-    assert all("payload_is_trash" in st.reward and st.done_when == "distxy(payload, a1) < 1.0 and not holding"
-               for st in ms.steps)
-    assert ms.anchors["a0"] == "item_2.handle" and ms.done_when == "trash_left < 0.01" and "trash_left" in ms.reward
+    assert ms.anchors["a0"] == "nearest:trash" and ms.anchors["a1"] == "bin" and not ms.steps
+    assert "payload_is_trash" in ms.reward and "trash_left" in ms.reward
+    assert ms.done_when == "trash_left < 0.01 and not holding"
     assert "backpack" in ms.explanation and "flower pot" in ms.explanation
-    for i, item in enumerate(order):
-        bind_mission(env, ms, step=i)
-        assert env.bound[0][0].entity == item and env.bound[0][0].kind == "handle"
+    bind_mission(env, ms)
+    assert env.bound[0][0].entity == "nearest:trash" and env.bound[0][0].kind == "handle"
 
 
 def test_offline_pile_listing_order_without_positions():
     ms, _ = _check_offline("trash", trash_no_positions(), "pick up all the trash")
-    assert [st.anchors["a0"] for st in ms.steps] == ["item_0.handle", "item_2.handle", "item_4.handle"]
-    assert "trash bin" in ms.explanation
+    assert ms.anchors["a0"] == "nearest:trash" and "trash bin" in ms.explanation
 
 
 def test_offline_pile_by_type_and_avoid():
     ms, _ = _check_offline("trash", TRASH, "pick up all the pizza boxes and avoid the no-fly zone")
-    assert [st.anchors["a0"] for st in ms.steps] == ["item_2.handle", "item_3.handle"]
-    assert all(st.anchors["a2"] == "nofly_0" and "5*inside(a2)" in st.reward for st in ms.steps)
-    assert "payload_is('pizza_box')" in ms.reward and ms.done_when is None
+    assert ms.anchors["a0"] == "nearest:pizza_box" and ms.anchors["a2"] == "nofly_0" and "5*inside(a2)" in ms.reward
+    assert "payload_is('pizza_box')" in ms.reward and ms.done_when == "not active(a0) and not holding"
+
+
+def test_selector_names_and_aliases_resolve():
+    from skyhand.mission.schema import infer_kind, resolve_entity
+    names = list(TRASH)
+    assert resolve_entity("nearest:trash", names) == "nearest:trash"
+    assert resolve_entity("closest pizza box", names) == "nearest:pizza_box"
+    assert resolve_entity("the nearest trash", names) == "nearest:trash"
+    assert infer_kind("nearest:trash") == "handle" and infer_kind("nearest:animal") == "point"
+
+
+def test_dsl_active():
+    from skyhand import spec as S
+    from skyhand.mission.dsl import compile_reward
+    g = torch.zeros(3, S.G_DIM)
+    g[1, S.G_SLICES["anchor_active"].start + 2] = 1.0
+    assert compile_reward("active(a2)")(g).tolist() == [0.0, 1.0, 0.0]
 
 
 def test_offline_pile_nothing_left():

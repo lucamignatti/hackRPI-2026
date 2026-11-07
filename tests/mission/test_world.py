@@ -195,10 +195,8 @@ def test_world_offline_trash_single():
 
 def test_world_offline_trash_pile_skips_cooler_and_inactive():
     ms, _ = _check("pick up all the trash")
-    order = [st.anchors["a0"] for st in ms.steps]
-    # trash only: backpack, ball, the cooler and inactive item_7 skipped; nearest drone_0 first, then by truck
-    assert order == ["item_1.handle", "item_4.handle", "item_0.handle", "item_2.handle"]
-    assert ms.done_when == "trash_left < 0.01" and "cooler" in ms.explanation
+    assert ms.anchors["a0"] == "nearest:trash" and ms.anchors["a1"] == "bin"
+    assert ms.done_when == "trash_left < 0.01 and not holding" and "cooler" in ms.explanation
 
 
 @pytest.mark.parametrize("text", ["deliver the organ cooler gently to the hospital",

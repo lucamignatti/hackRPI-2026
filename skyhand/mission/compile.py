@@ -179,7 +179,9 @@ Scenes:
     and whether it is trash; "(inactive)" items do not exist in this world - never bind them. Bind the handle of
     the item the operator means (the nearest one of that type if several) and carry it to "bin" (a garbage truck
     in a city, a trash bin on open terrain). Never pick up items that are not trash unless explicitly asked.
-    "Clear the pile / pick up all the trash" means one step per trash item (nearest first), each step binding
+    "Clear the pile / pick up all the trash" binds a0 to the selector "nearest:trash" (or "nearest:<item type>"),
+    which re-targets to the closest matching item every step, and a1 to the drop-off; one mission, no steps. Older form:
+    one step per trash item (nearest first), each step binding
     a0 to that item's handle and a1 to bin.
   delivery: item_0 is the organ cooler (handle item_0.handle) waiting at pad_pickup; deliver it to pad_dropoff
     gently (swing / jerk / tilt penalties), avoid nofly_0 and nofly_1, and stay well above the terrain
@@ -754,17 +756,16 @@ def _single(text: str, scene: str, entities: Dict[str, str], drone: str = "drone
                 wrong = " - 2*holding*(1 - payload_is_trash)"
             else:
                 wrong = ""
-            step_r = "where(holding, 2 - dist(payload, a1), -dist(drone, a0))" + wrong + gentle_pen
-            steps = [{"anchors": {"a0": it["target"], "a1": dest, "a2": None, "a3": None}, "reward": step_r,
-                      "done_when": pick_done,
-                      "explanation": f"Grab {_item_label(it)} and drop it in {dest_txt}."} for it in chosen]
-            anchors.update(steps[0]["anchors"])
-            reward = step_r + (" - 2*trash_left" if all_trash else "")
-            done = "trash_left < 0.01" if all_trash else None
-            labels = [_item_label(it) for it in chosen]
-            listed = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
-            expl = f"Carry {listed} to {dest_txt} one at a time, nearest first"
-            skipped = [it for it in items if it["active"] and it not in chosen]
+            # one mission with a selector anchor: a0 re-targets to the closest matching item every
+            # step (and stays on the item being carried), so the drone works through them all
+            sel = f"nearest:{types_named[0]}" if len(types_named) == 1 else "nearest:trash"
+            anchors.update({"a0": sel, "a1": dest})
+            reward = "where(holding, 2 - dist(payload, a1), -dist(drone, a0))" + wrong + gentle_pen + \
+                (" - 2*trash_left" if all_trash else "")
+            done = "trash_left < 0.01 and not holding" if all_trash else "not active(a0) and not holding"
+            what = types_named[0].replace("_", " ") if len(types_named) == 1 else "trash item"
+            expl = f"Keep grabbing the nearest {what} and dropping it in {dest_txt} until none is left"
+            skipped = [it for it in items if it["active"] and not (it["trash"] if not types_named else it["type"] in types_named)]
             if skipped:
                 kinds = sorted({(x["type"] or "other item").replace("_", " ") for x in skipped})
                 expl += ", leaving the " + " and the ".join(kinds) + (" where they are" if len(skipped) > 1
