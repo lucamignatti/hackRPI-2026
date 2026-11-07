@@ -51,6 +51,7 @@ class ReplayBuffer:
         self.done = torch.zeros(c, dtype=torch.bool, device=dev)
         self.z = torch.zeros(c, d, dtype=torch.float16, device=dev)   # half: 512 B at d=256
         self.world = torch.zeros(c, dtype=torch.long, device=dev)
+        self.expert = torch.zeros(c, dtype=torch.bool, device=dev)     # action came from the scripted expert
         self.ptr = 0
         self.size = 0
         self._streams: Dict[object, Dict[str, torch.Tensor]] = {}
@@ -77,10 +78,10 @@ class ReplayBuffer:
     @torch.no_grad()
     def add(self, obs: Dict[str, torch.Tensor], action: torch.Tensor, next_obs: Dict[str, torch.Tensor],
             done: torch.Tensor, reset: torch.Tensor, z: torch.Tensor,
-            world_offset: int = 0, stream: object = 0) -> None:
+            world_offset: int = 0, stream: object = 0, expert: Optional[torch.Tensor] = None) -> None:
         """obs/next_obs: [N, A, ...] dicts; action [N, A, 5]; done, reset [N] bool
         (done masks the bootstrap; reset = done | truncated, worlds reset after this call);
-        z [N, d] (team z) or [N, A, d]."""
+        z [N, d] (team z) or [N, A, d]; expert [N] bool, True where the scripted expert acted."""
         n, a = action.shape[:2]
         m = n * a
         dev = self.device
@@ -112,6 +113,8 @@ class ReplayBuffer:
         self.z[t] = z.reshape(m, -1).to(dev).half()
         w = world_offset + torch.arange(n, device=dev)
         self.world[t] = w.unsqueeze(1).expand(n, a).reshape(m)
+        ex = torch.zeros(n, dtype=torch.bool, device=dev) if expert is None else expert.to(dev).bool().reshape(n)
+        self.expert[t] = ex.reshape(n, 1).expand(n, a).reshape(m)
         self.ptr = (self.ptr + m) % self.capacity
         self.size = min(self.size + m, self.capacity)
 
@@ -125,7 +128,7 @@ class ReplayBuffer:
     @torch.no_grad()
     def sample(self, b: int, device=None) -> Dict[str, object]:
         """Random batch: obs, next_obs (dicts with CRITIC_KEYS + g, LiDAR uint8),
-        action [b, 5], g, next_g [b, G], done [b] float, z [b, d], world [b]."""
+        action [b, 5], g, next_g [b, G], done [b] float, z [b, d], world [b], expert [b] bool."""
         assert self.size > 0, "empty buffer"
         dev = self.device
         t = torch.randint(0, self.size, (b,), device=dev)
@@ -136,7 +139,8 @@ class ReplayBuffer:
             t[bad] = torch.randint(0, self.size, (int(bad.sum()),), device=dev)
         obs, nobs = self._gather(self.obs_idx[t]), self._gather(self.next_idx[t])
         out = {"obs": obs, "next_obs": nobs, "action": self.action[t], "g": obs["g"],
-               "next_g": nobs["g"], "done": self.done[t].float(), "z": self.z[t].float(), "world": self.world[t]}
+               "next_g": nobs["g"], "done": self.done[t].float(), "z": self.z[t].float(), "world": self.world[t],
+               "expert": self.expert[t]}
         if device is not None:
             out = _to(out, torch.device(device))
         return out
@@ -184,9 +188,12 @@ class DemoStore:
         self.size = min(self.size + k, self.capacity)
 
     @torch.no_grad()
-    def add_rollout(self, g_seq: torch.Tensor, cut: Optional[torch.Tensor] = None) -> int:
-        """g_seq [T, M, G]; cut [T, M] bool, True where the episode ended after step t.
-        Cuts into non-overlapping length-L segments that do not cross an episode end."""
+    def add_rollout(self, g_seq: torch.Tensor, cut: Optional[torch.Tensor] = None,
+                    bad: Optional[torch.Tensor] = None) -> int:
+        """g_seq [T, M, G]; cut [T, M] bool, True where the episode ended after step t;
+        bad [T, M] bool, states that must not appear in demos (segments containing one
+        are dropped). Cuts into non-overlapping length-L segments that do not cross an
+        episode end."""
         T, M = g_seq.shape[:2]
         L = self.seg_len
         if T < L:
@@ -198,6 +205,9 @@ class DemoStore:
             ok = ~c[..., :-1].any(-1)
         else:
             ok = torch.ones(nw, M, dtype=torch.bool, device=g_seq.device)
+        if bad is not None:
+            b = bad[: nw * L].reshape(nw, L, M).permute(0, 2, 1)
+            ok = ok & ~b.any(-1)
         segs = segs[ok]
         self.add_segments(segs)
         return int(segs.shape[0])

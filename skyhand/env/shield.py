@@ -16,9 +16,15 @@ def shield_velocity(pos: torch.Tensor, v: torch.Tensor,
                     cyl_active: Optional[torch.Tensor] = None,
                     box_center: Optional[torch.Tensor] = None, box_half: Optional[torch.Tensor] = None,
                     box_active: Optional[torch.Tensor] = None,
-                    margin: float = 0.6, horizon: float = 0.5) -> Tuple[torch.Tensor, torch.Tensor]:
+                    margin: float = 0.6, horizon: float = 0.5,
+                    floor: Optional[torch.Tensor] = None,
+                    vel: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
     """pos, v [N, A, 3]. Cylinders: center [N, Z, 3] (xy used), radius [N, Z], active [N, Z].
-    Boxes: center/half [N, B, 3], active [N, B]. Returns (v_safe [N, A, 3], hit [N, A] bool)."""
+    Boxes: center/half [N, B, 3], active [N, B]. floor [N, A]: lowest allowed height at
+    each drone's predicted position (terrain or water plus clearance); downward
+    velocity that would cross it is removed. vel [N, A, 3]: actual velocity; if the
+    drone is already falling toward the floor faster than it can stop, the shield
+    commands a climb to brake. Returns (v_safe [N, A, 3], hit [N, A] bool)."""
     v = v.clone()
     hit = torch.zeros(pos.shape[:2], dtype=torch.bool, device=pos.device)
     if cyl_center is not None and cyl_center.shape[1] > 0:
@@ -54,4 +60,12 @@ def shield_velocity(pos: torch.Tensor, v: torch.Tensor,
         corr = torch.where(fix.unsqueeze(-1), -vn.unsqueeze(-1) * n, torch.zeros_like(n)).sum(2)
         v = v + corr
         hit |= fix.any(-1)
+    if floor is not None:
+        vz_act = v[..., 2] if vel is None else torch.minimum(v[..., 2], vel[..., 2])
+        pred_z = pos[..., 2] + vz_act * horizon
+        low = (pred_z < floor) & (vz_act < 0)
+        falling = low & (vz_act < -1.0)
+        v[..., 2] = torch.where(falling, torch.full_like(v[..., 2], 1.5),
+                                torch.where(low, v[..., 2].clamp_min(0.0), v[..., 2]))
+        hit |= low
     return v, hit

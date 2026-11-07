@@ -174,12 +174,16 @@ class QueryNet(nn.Module):
     """z-conditioned queries cross-attending to state tokens; mean -> LN -> linear head."""
 
     def __init__(self, d: int, out_dim: int, width: int, heads: int, blocks: int,
-                 n_queries: int = 8, priv: bool = True, action: bool = True, tanh: bool = False):
+                 n_queries: int = 8, priv: bool = True, action: bool = True, tanh: bool = False,
+                 action_queries: bool = False):
         super().__init__()
         self.d, self.nq, self.w, self.tanh = d, n_queries, width, tanh
         self.embed = TokenEmbed(width, priv=priv, action=action)
         self.base = nn.Parameter(torch.randn(n_queries, width) * 0.02)
         self.zproj = nn.Linear(d, n_queries * width)
+        # The action also shapes every query directly. As one context token among ~60 its
+        # signal can be diluted by attention, and the actor learns only from dF/da.
+        self.aproj = nn.Linear(spec.ACTION_DIM, n_queries * width) if (action and action_queries) else None
         self.blocks = nn.ModuleList([Block(width, heads) for _ in range(blocks)])
         self.norm = LN(width)
         self.head = nn.Linear(width, out_dim)
@@ -188,6 +192,8 @@ class QueryNet(nn.Module):
                 action: Optional[torch.Tensor] = None) -> torch.Tensor:
         ctx, mask = self.embed(obs, action)
         q = self.base + self.zproj(sphere(z)).unflatten(-1, (self.nq, self.w))
+        if self.aproj is not None:
+            q = q + self.aproj(action).unflatten(-1, (self.nq, self.w))
         for b in self.blocks:
             q = b(q, ctx, mask)
         y = self.head(self.norm(q.mean(1)))
@@ -208,8 +214,9 @@ class Critic(QueryNet):
     """Privileged critic with an action token. out_dim = d for F, 1 for Q_D / Q_R."""
 
     def __init__(self, d: int, out_dim: int, width: int = 256, heads: int = 4,
-                 blocks: int = 4, n_queries: int = 8):
-        super().__init__(d, out_dim, width, heads, blocks, n_queries, priv=True, action=True)
+                 blocks: int = 4, n_queries: int = 8, action_queries: bool = True):
+        super().__init__(d, out_dim, width, heads, blocks, n_queries, priv=True, action=True,
+                         action_queries=action_queries)
         self.scalar = out_dim == 1
 
     def forward(self, obs, z, action=None):
@@ -221,9 +228,10 @@ class FEnsemble(nn.Module):
     """Twin forward networks; returns [n, M, d]."""
 
     def __init__(self, d: int, width: int = 256, heads: int = 4, blocks: int = 4,
-                 n_queries: int = 8, n: int = 2):
+                 n_queries: int = 8, n: int = 2, action_queries: bool = True):
         super().__init__()
-        self.nets = nn.ModuleList([Critic(d, d, width, heads, blocks, n_queries) for _ in range(n)])
+        self.nets = nn.ModuleList([Critic(d, d, width, heads, blocks, n_queries, action_queries)
+                                   for _ in range(n)])
 
     def forward(self, obs, z, action):
         return torch.stack([f(obs, z, action) for f in self.nets], 0)
@@ -277,11 +285,12 @@ class Discriminator(nn.Module):
 
 def build_networks(cfg, d: int) -> Dict[str, nn.Module]:
     """All learner networks from a Config. B is omitted here (method specific)."""
+    aq = getattr(cfg, "action_queries", True)
     return {
-        "F": FEnsemble(d, cfg.f_width, cfg.f_heads, cfg.f_blocks, cfg.n_queries),
+        "F": FEnsemble(d, cfg.f_width, cfg.f_heads, cfg.f_blocks, cfg.n_queries, action_queries=aq),
         "actor": Actor(d, cfg.actor_width, cfg.actor_heads, cfg.actor_blocks, cfg.n_queries,
                        priv=cfg.actor_priv),
-        "QD": Critic(d, 1, cfg.critic_width, cfg.critic_heads, cfg.critic_blocks, cfg.n_queries),
-        "QR": Critic(d, 1, cfg.critic_width, cfg.critic_heads, cfg.critic_blocks, cfg.n_queries),
+        "QD": Critic(d, 1, cfg.critic_width, cfg.critic_heads, cfg.critic_blocks, cfg.n_queries, aq),
+        "QR": Critic(d, 1, cfg.critic_width, cfg.critic_heads, cfg.critic_blocks, cfg.n_queries, aq),
         "D": Discriminator(d, cfg.disc_width, cfg.disc_blocks),
     }

@@ -23,14 +23,26 @@ class FishSchools:
         self.caught = torch.zeros(n, self.f, dtype=torch.bool, device=device)
         self.caught_off = torch.zeros(n, self.f, 3, device=device)
         self.flee_gain = torch.ones(n, device=device)
+        self.home_c = torch.zeros(n, 2, device=device)                     # region the schools stay in
+        self.home_r = torch.full((n,), spec.ARENA_HALF - 4.0, device=device)
 
-    def reset(self, env_ids: torch.Tensor, gen: Optional[torch.Generator] = None) -> None:
+    def _in_home(self, env_ids: torch.Tensor, k: int, r) -> torch.Tensor:
+        """k random xy points [m, k, 2] inside each world's home disc."""
+        m = len(env_ids)
+        ang = r(m, k) * 2 * math.pi
+        rad = torch.sqrt(r(m, k)) * self.home_r[env_ids, None] * 0.85
+        return self.home_c[env_ids, None] + torch.stack([torch.cos(ang), torch.sin(ang)], -1) * rad.unsqueeze(-1)
+
+    def reset(self, env_ids: torch.Tensor, gen: Optional[torch.Generator] = None,
+              home_c: Optional[torch.Tensor] = None, home_r: Optional[torch.Tensor] = None) -> None:
         m = len(env_ids)
         if m == 0:
             return
         r = lambda *s: torch.rand(*s, generator=gen).to(self.device)
-        centers = torch.cat([(r(m, self.s, 2) - 0.5) * 2 * (spec.ARENA_HALF - 4),
-                             -(0.5 + 0.8 * r(m, self.s, 1))], -1)
+        if home_c is not None:
+            self.home_c[env_ids] = home_c
+            self.home_r[env_ids] = home_r
+        centers = torch.cat([self._in_home(env_ids, self.s, r), -(0.5 + 0.8 * r(m, self.s, 1))], -1)
         jitter = (r(m, self.f, 3) - 0.5) * torch.tensor([2.0, 2.0, 0.5], device=self.device)
         self.pos[env_ids] = centers[:, self.school] + jitter
         ang = r(m, self.s) * 2 * math.pi
@@ -42,8 +54,7 @@ class FishSchools:
     def _new_targets(self, env_ids, gen=None):
         m = len(env_ids)
         r = lambda *s: torch.rand(*s, generator=gen).to(self.device)
-        self.target[env_ids] = torch.cat([(r(m, self.s, 2) - 0.5) * 2 * (spec.ARENA_HALF - 4),
-                                          -(0.5 + 0.8 * r(m, self.s, 1))], -1)
+        self.target[env_ids] = torch.cat([self._in_home(env_ids, self.s, r), -(0.5 + 0.8 * r(m, self.s, 1))], -1)
 
     def school_centers(self) -> torch.Tensor:
         oh = torch.nn.functional.one_hot(self.school, self.s).float()          # [F, S]
@@ -79,9 +90,10 @@ class FishSchools:
         top = surface - 0.3                  # schools feed near the surface
         bottom = surface - 2.0
         acc[..., 2] += 4.0 * (top - p[..., 2]).clamp(max=0.0) + 4.0 * (bottom - p[..., 2]).clamp(min=0.0)
-        # arena walls
-        acc[..., :2] += 2.0 * ((-(spec.ARENA_HALF - 1)) - p[..., :2]).clamp(min=0.0) \
-            - 2.0 * (p[..., :2] - (spec.ARENA_HALF - 1)).clamp(min=0.0)
+        # stay inside the home disc (open water)
+        off = p[..., :2] - self.home_c[:, None]
+        dist = off.norm(dim=-1, keepdim=True).clamp_min(1e-3)
+        acc[..., :2] -= 2.0 * (dist - self.home_r[:, None, None]).clamp(min=0.0) * off / dist
         v = v + dt * acc
         speed = v.norm(dim=-1, keepdim=True)
         v = v / speed.clamp_min(1e-6) * speed.clamp(0.15, 0.8)
@@ -108,9 +120,10 @@ class FishSchools:
         self.vel = torch.where(c, net_vel[ar, low][:, None].expand_as(self.vel), self.vel)
 
     def state(self) -> dict:
-        return {"pos": self.pos, "vel": self.vel, "target": self.target, "caught": self.caught, "caught_off": self.caught_off}
+        return {"pos": self.pos, "vel": self.vel, "target": self.target, "caught": self.caught, "caught_off": self.caught_off,
+                "home_c": self.home_c, "home_r": self.home_r}
 
     def load(self, st: dict, env_ids: torch.Tensor, src: Optional[torch.Tensor] = None) -> None:
         src = env_ids if src is None else src
-        for k in ("pos", "vel", "target", "caught", "caught_off"):
+        for k in ("pos", "vel", "target", "caught", "caught_off", "home_c", "home_r"):
             getattr(self, k)[env_ids] = st[k][src]

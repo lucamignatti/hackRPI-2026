@@ -49,6 +49,22 @@ def fb_measure_loss(Fk: torch.Tensor, Bn: torch.Tensor, target_M: torch.Tensor,
     return loss, offdiag.mean(), diag.mean()
 
 
+def fb_q_loss(Fz: torch.Tensor, Bz: torch.Tensor, target_Fz: torch.Tensor,
+              done: torch.Tensor, gamma: float) -> torch.Tensor:
+    """Auxiliary diagonal loss (Touati, Rapin, Ollivier 2023, eq. 9 / 42), summed over the ensemble:
+    mean_i ( F_k(s_i,a_i,z_i)^T z_i - B(s'_i)^T Cov^+ z_i - gamma min_l Fbar_l(s'_i,a'_i,z_i)^T z_i )^2.
+    Fz [n, b]; Bz [b] = B(s')^T Cov^+ z (no grad); target_Fz [b]; done [b]."""
+    y = Bz + gamma * (1.0 - done) * target_Fz
+    return (Fz - y.unsqueeze(0)).pow(2).mean(-1).sum()
+
+
+def _pinv(m: torch.Tensor) -> torch.Tensor:
+    """Pseudo-inverse; computed on CPU where the device lacks a kernel (e.g. MPS)."""
+    if m.device.type == "mps":
+        return torch.linalg.pinv(m.cpu()).to(m.device)
+    return torch.linalg.pinv(m)
+
+
 def ortho_loss(Bm: torch.Tensor) -> torch.Tensor:
     """Frobenius orthonormality ||E[B B^T] - I||^2 over a batch Bm [b, d].
     Equals mean_ij (B_i.B_j)^2 - 2 mean_i |B_i|^2 + d (PLAN eq. 25-26 plus a constant)."""
@@ -121,8 +137,19 @@ class FBCPR(nn.Module):
         l_fb, off, diag = fb_measure_loss(Fk, Bn, tM, done, cfg.gamma)
         l_or = ortho_loss(self.B(batch["g"]))
         loss = l_fb + cfg.ortho_coef * l_or
+        # auxiliary diagonal loss: trains F^T z directly on the z it was sampled with
+        coef = cfg.q_loss_coef if cfg.q_loss_coef >= 0 else 1.0 / self.d
+        l_q = torch.zeros((), device=Fk.device)
+        if coef > 0:
+            with torch.no_grad():
+                Bd = Bn.detach()
+                cov = Bd.t() @ Bd / Bd.shape[0]
+                Bz = ((Bd @ _pinv(cov)) * z).sum(-1)                              # [b]
+                tFz = (tF * z.unsqueeze(0)).sum(-1).min(0).values                 # [b]
+            l_q = fb_q_loss((Fk * z.unsqueeze(0)).sum(-1), Bz, tFz, done, cfg.gamma)
+            loss = loss + coef * l_q
         return loss, {"fb_loss": l_fb.item(), "fb_offdiag": off.item(), "fb_diag": diag.item(),
-                      "ortho_loss": l_or.item()}
+                      "ortho_loss": l_or.item(), "fb_q_loss": l_q.item()}
 
     # -------------------------------------------------- helpers
     def _step(self, opt, loss, params=None):
@@ -154,6 +181,9 @@ class FBCPR(nn.Module):
         g, ng, done = batch["g"], batch["next_g"], batch["done"]
         b = g.shape[0]
         have_demo = demo is not None and len(demo) > 0
+        # discriminator negatives are policy states only: expert-flown transitions are excluded
+        expert = batch.get("expert")
+        neg = torch.ones(b, dtype=torch.bool, device=g.device) if expert is None else ~expert.to(g.device).bool()
         m: Dict[str, float] = {}
         # z for this batch from the mixture (buffer states = this batch's next g)
         z = self.zs.sample(b, self.encode_g, demo=demo, g_pool=ng)
@@ -168,7 +198,7 @@ class FBCPR(nn.Module):
         m.update(mm)
 
         # ---- discriminator
-        if have_demo:
+        if have_demo and neg.any():
             L = demo.seg_len
             k = max(1, b // L)
             segs = demo.sample_segments(k, g.device)
@@ -176,12 +206,12 @@ class FBCPR(nn.Module):
                 z_tau = self.zs.encode_segments(self.encode_g, segs)              # [k, d]
             pos_g = segs.reshape(k * L, -1)
             pos_z = z_tau.unsqueeze(1).expand(k, L, self.d).reshape(k * L, self.d)
-            neg_g, neg_z = g, batch["z"]
+            neg_g, neg_z = g[neg], batch["z"][neg]
             _, lp = self.D(pos_g, pos_z)
             _, ln_ = self.D(neg_g, neg_z)
             bce = F.binary_cross_entropy_with_logits(lp, torch.ones_like(lp)) + \
                 F.binary_cross_entropy_with_logits(ln_, torch.zeros_like(ln_))
-            nn_ = min(pos_g.shape[0], b)
+            nn_ = min(pos_g.shape[0], neg_g.shape[0])
             xp = self.D.features(pos_g[:nn_], pos_z[:nn_])
             xn = self.D.features(neg_g[:nn_], neg_z[:nn_])
             alpha = torch.rand(nn_, 1, device=g.device)
@@ -192,6 +222,11 @@ class FBCPR(nn.Module):
             self._step(self.opt_d, bce + cfg.gp_coef * gp)
             m.update({"d_loss": bce.item(), "d_gp": gp.item(),
                       "d_acc_pos": (lp > 0).float().mean().item(), "d_acc_neg": (ln_ < 0).float().mean().item()})
+            with torch.no_grad():
+                _, lr_ = self.D(ng, z)
+                r_d = lr_.clamp(-cfg.disc_reward_clip, cfg.disc_reward_clip)
+        elif have_demo:   # no policy negatives in this batch: skip the D step, still use D's reward
+            m.update({"d_loss": 0.0, "d_gp": 0.0, "d_acc_pos": 0.0, "d_acc_neg": 0.0})
             with torch.no_grad():
                 _, lr_ = self.D(ng, z)
                 r_d = lr_.clamp(-cfg.disc_reward_clip, cfg.disc_reward_clip)

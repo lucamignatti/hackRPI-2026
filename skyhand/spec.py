@@ -24,13 +24,13 @@ PHYS_DT = 0.01            # physics step (s)
 SUBSTEPS = 5              # physics steps per policy step -> 20 Hz policy
 POLICY_DT = PHYS_DT * SUBSTEPS
 LIDAR_EVERY = 2           # policy steps between LiDAR scans -> 10 Hz
-EPISODE_STEPS = 600       # 30 s episodes
+EPISODE_STEPS = 900       # 45 s episodes (default; see SCENE_EPISODE_STEPS)
 Z_RESAMPLE_STEPS = 100    # policy steps a world keeps its z during pretraining
 
 # ---------------------------------------------------------------- action
 ACTION_DIM = 5            # [vx, vy, vz, yaw_rate, grip] each in [-1, 1]
-MAX_SPEED = 6.0           # m/s, scale for vx, vy
-MAX_VZ = 3.0              # m/s, scale for vz
+MAX_SPEED = 6.0           # m/s, scale for vx, vy (default; see SCENE_MAX_SPEED)
+MAX_VZ = 3.0              # m/s, scale for vz (default; see SCENE_MAX_VZ)
 MAX_YAW_RATE = 2.0        # rad/s
 GRIP_CLOSED_THRESHOLD = 0.0   # grip > 0 means closed
 
@@ -43,17 +43,61 @@ GRASP_MAX_REL_SPEED = 0.6 # m/s, max relative speed to grasp
 MAX_TILT = 0.6            # rad, controller tilt limit
 
 # ---------------------------------------------------------------- scenes
-SCENES = ("trash", "ocean")
+# trash:    each world is either a city (street grid of buildings, trash piled at the
+#           curb, a garbage truck as drop-off) or open terrain with scattered litter.
+# delivery: long-range, fast organ delivery between two remote clinics (Zipline-style,
+#           rural Africa): a 600 m arena of hills, mesas, a river valley and lakes,
+#           villages of huts around each clinic, acacia trees, vultures, large no-fly
+#           areas such as a wildlife reserve.
+# ocean:    team net fishing among fish schools and marine animals (bycatch).
+# world:    the generic pretraining world that contains all of the above at once: a
+#           400 m map with countryside, lakes, a coastline into open sea, a town with
+#           trash piles and a garbage truck, two clinics, a boat with the net, fish,
+#           animals, birds, and no-fly zones. Each task is a subset of this world.
+SCENES = ("trash", "delivery", "ocean", "world")
 TRASH_AGENTS = 1
+DELIVERY_AGENTS = 1
 OCEAN_AGENTS = 3
-ARENA_HALF = 15.0         # both scenes are 30 x 30 m
-TRASH_N_OBSTACLES = 6     # boxes, of which TRASH_N_MOVING move
-TRASH_N_MOVING = 2
+WORLD_AGENTS = 3
+SCENE_AGENTS = {"trash": TRASH_AGENTS, "delivery": DELIVERY_AGENTS, "ocean": OCEAN_AGENTS, "world": WORLD_AGENTS}
+ARENA_HALF = 25.0         # trash and ocean are 50 x 50 m
+# Per-scene physical scale. Actions are normalised: vx, vy in [-1, 1] times the
+# scene's max speed. Delivery is a streamlined fast drone with far less drag.
+SCENE_ARENA_HALF = {"trash": 25.0, "delivery": 300.0, "ocean": 25.0, "world": 200.0}
+SCENE_MAX_SPEED = {"trash": 6.0, "delivery": 18.0, "ocean": 6.0, "world": 12.0}
+SCENE_MAX_VZ = {"trash": 3.0, "delivery": 6.0, "ocean": 3.0, "world": 5.0}
+SCENE_DRAG = {"trash": 0.35, "delivery": 0.035, "ocean": 0.35, "world": 0.08}
+SCENE_EPISODE_STEPS = {"trash": 900, "delivery": 1800, "ocean": 900, "world": 1800}
+SCENE_TERRAIN_RES = {"trash": 64, "delivery": 64, "ocean": 64, "world": 128}
+TERRAIN_RES = 64          # heightfield samples per side (default; see SCENE_TERRAIN_RES)
+MAX_BOXES = 48            # buildings, cars, benches, hydrants, truck, boat hull, tree trunks, huts ...
+MAX_SPHERES = 40          # rocks, tree canopies, birds
+MAX_ITEMS = 16            # graspable objects per world
 NET_ROWS = 8
 NET_COLS = 8
 N_FISH_SCHOOLS = 2
 FISH_PER_SCHOOL = 16
 N_WAVES = 4
+ANIMAL_TYPES = ("whale", "dolphin", "turtle")
+ANIMAL_COUNTS = (1, 2, 2)  # per ocean world
+N_ANIMALS = sum(ANIMAL_COUNTS)
+
+# ---------------------------------------------------------------- graspable items
+# name, shape ("box" or "sphere"), size (box: full x, y, z; sphere: radius, -, -),
+# mass (kg), is_trash. Shapes are chosen to be easy to tell apart on LiDAR:
+# a round bag, a flat pizza box, a cube, a thin tall bottle, a tall narrow backpack ...
+ITEM_CATALOG = (
+    ("trash_bag",     "sphere", (0.28, 0.0, 0.0),   0.8, True),
+    ("pizza_box",     "box",    (0.45, 0.45, 0.06), 0.4, True),
+    ("cardboard_box", "box",    (0.40, 0.40, 0.40), 0.6, True),
+    ("bottle",        "box",    (0.09, 0.09, 0.30), 0.2, True),
+    ("backpack",      "box",    (0.32, 0.20, 0.45), 1.0, False),
+    ("ball",          "sphere", (0.12, 0.0, 0.0),   0.4, False),
+    ("flower_pot",    "box",    (0.30, 0.30, 0.35), 1.2, False),
+    ("cooler",        "box",    (0.45, 0.30, 0.30), 1.3, False),   # organ transport, delivery scene
+)
+ITEM_TYPES = tuple(c[0] for c in ITEM_CATALOG)
+ITEM_IS_TRASH = tuple(c[4] for c in ITEM_CATALOG)
 
 # ---------------------------------------------------------------- LiDAR
 LIDAR_CH = 3              # 0: NIR range, 1: green range, 2: green intensity
@@ -77,35 +121,44 @@ ANCHOR_DIM = 3 + len(ANCHOR_TYPES) + 2   # rel pos (drone frame, world-aligned),
 PROPRIO_DIM = 3 + 3 + 3 + 1 + 1 + 1 + ACTION_DIM
 MAX_MATES = OCEAN_AGENTS - 1
 MATE_DIM = 3 + 3 + 1                     # rel pos, rel vel, holding
-MAX_PRIV = 16
-PRIV_TYPES = ("obstacle", "payload", "net", "fish_school", "boat", "zone")
+MAX_PRIV = 24             # the nearest MAX_PRIV entities to each drone
+PRIV_TYPES = ("box", "sphere", "item_trash", "item_other", "cooler", "net", "fish_school", "boat",
+              "zone", "animal")
 PRIV_DIM = 3 + 3 + 3 + len(PRIV_TYPES)   # rel pos, vel, size, type one-hot
 
 # ---------------------------------------------------------------- goal space g
 # Ordered (name, size, scale). B, the discriminator, and reward programs read g.
 # scale is a fixed normaliser: networks see g / scale. Reward programs see raw g.
 _G_FIELDS = [
-    ("drone_pos", 3, 15.0),        # world position
+    ("drone_pos", 3, 25.0),        # world position
     ("drone_vel", 3, 6.0),
     ("speed", 1, 6.0),
     ("tilt", 1, 1.0),              # rad
-    ("height", 1, 10.0),           # above ground or wave surface
+    ("height", 1, 10.0),           # above the terrain or water surface below the drone
+    ("over_water", 1, 1.0),        # 1 if the surface below the drone is water
     ("thrust", 1, 1.0),            # collective thrust / hover thrust
     ("grip_closed", 1, 1.0),
     ("holding", 1, 1.0),
     ("held_mass", 1, 2.0),
-    ("payload_rel", 3, 15.0),      # payload position minus drone position
+    ("payload_rel", 3, 25.0),      # payload position minus drone position. Payload = the held item, else
+                                   # the last-held item (until another is grasped or a0 moves on), else
+                                   # the item bound to a0, else the nearest available item
+    ("payload_type", len(ITEM_TYPES), 1.0),   # one-hot item type of the payload (zeros: net corner / none)
+    ("payload_is_trash", 1, 1.0),
     ("payload_vel", 3, 6.0),
     ("swing", 1, 3.0),             # payload angular rate about the gripper (rad/s)
     ("jerk", 1, 50.0),             # drone jerk magnitude (m/s^3)
-    ("anchor_rel_drone", 3 * N_ANCHORS, 15.0),    # anchor k position minus drone position
-    ("anchor_rel_payload", 3 * N_ANCHORS, 15.0),  # anchor k position minus payload position
+    ("anchor_rel_drone", 3 * N_ANCHORS, 25.0),    # anchor k position minus drone position
+    ("anchor_rel_payload", 3 * N_ANCHORS, 25.0),  # anchor k position minus payload position
     ("anchor_inside", N_ANCHORS, 1.0),            # drone inside anchor k zone
     ("obstacle_dist", 1, 10.0),    # distance from drone surface to nearest obstacle
     ("obstacle_closing", 1, 6.0),  # closing speed toward it (positive = approaching)
-    ("net_centroid_rel", 3, 15.0), # net centroid minus drone position (zeros in trash)
+    ("trash_left", 1, 1.0),        # fraction of this world's trash not yet delivered (trash scene)
+    ("net_centroid_rel", 3, 25.0), # net centroid minus drone position (zeros outside ocean)
     ("net_stretch", 1, 1.0),       # max edge stretch ratio minus 1
     ("fish_in_net", 1, 1.0),       # fraction of fish inside the net volume
+    ("animal_dist", 1, 10.0),      # nearest marine animal to any net node (ocean; large elsewhere)
+    ("bycatch", 1, 1.0),           # 1 while an animal is tangled in the net
     ("mate_dist", 1, 10.0),        # nearest teammate distance (ARENA_HALF*2 if none)
     ("collision", 1, 1.0),         # 1 on a step with a collision
     ("shield", 1, 1.0),            # 1 on a step where the shield intervened
@@ -171,7 +224,7 @@ def check_obs(obs: Dict[str, torch.Tensor], n: int, a: int) -> None:
             assert torch.isfinite(t).all(), f"{k}: non-finite values"
 
 
-EVENT_KEYS = ("collision", "shield", "grasp", "release", "delivered", "tear")
+EVENT_KEYS = ("collision", "shield", "grasp", "release", "delivered", "tear", "bycatch", "lost")
 
 
 @dataclass
@@ -225,18 +278,50 @@ class SkyEnvAPI(Protocol):
 # ---------------------------------------------------------------- render state (demo)
 # env.render_state(i) returns a JSON-serialisable dict:
 # {
-#   "t": float, "scene": "trash" | "ocean",
-#   "drones":    [{"pos": [3], "quat": [4], "grip": bool, "holding": bool}],
-#   "payloads":  [{"name": str, "pos": [3], "quat": [4], "size": [3], "kind": "bag"|"cooler"}],
-#   "obstacles": [{"name": str, "pos": [3], "size": [3], "moving": bool, "dropped": bool}],  # dropped = placed by perturb
-#   "zones":     [{"name": str, "pos": [3], "radius": float, "height": float, "kind": "bin"|"nofly"|"boat"}],
+#   "t": float, "scene": "trash" | "delivery" | "ocean", "variant": "city" | "terrain" | "delivery" | "ocean",
+#   "max_speed": float,                                  # the scene's horizontal speed limit (m/s)
+#   "arena_half": float,
+#   "terrain":   None | {"version": int, "res": int, "half": float, "heights": [[res] * res]},
+#                # heights[i][j] at x = -half + 2*half*j/(res-1), y = -half + 2*half*i/(res-1).
+#                # Sent only when "version" changed since the last call with send_terrain=False
+#   "water":     None | {"level": float, "waves": None | {"amp","k","dir","omega","phase": [N_WAVES]}},
+#                # terrain scenes: flat water at "level" wherever the terrain is lower (lakes);
+#                # ocean: waves everywhere around level 0.
+#   "drones":    [{"pos": [3], "quat": [4], "grip": bool, "holding": bool, "alive": bool}],
+#   "items":     [{"name": "item_3", "type": ITEM_TYPES entry, "is_trash": bool, "shape": "box"|"sphere",
+#                  "pos": [3], "size": [3], "held": bool, "delivered": bool}],
+#                # delivered items stay listed with delivered=True (trash rests where it was dropped)
+#   "boxes":     [{"name": str, "kind": "building"|"car"|"truck"|"bench"|"hydrant"|"trunk"|"boat"|"dropped"|"bin"|"hut",
+#                  "pos": [3], "size": [3], "moving": bool}],
+#   "spheres":   [{"name": str, "kind": "rock"|"canopy"|"bird", "pos": [3], "radius": float, "moving": bool}],
+#   "zones":     [{"name": str, "pos": [3], "radius": float, "height": float,
+#                  "kind": "bin"|"truck"|"pad_pickup"|"pad_dropoff"|"nofly"|"boat"}],
 #   "anchors":   [{"pos": [3], "kind": str, "radius": float}],
-#   "waves":     None | {"amp": [N_WAVES], "k": [N_WAVES], "dir": [N_WAVES], "omega": [N_WAVES], "phase": [N_WAVES]},
 #   "boat":      None | {"pos": [3], "quat": [4], "size": [3]},
-#   "net":       None | {"rows": int, "cols": int, "nodes": [[3] * rows*cols], "held": [int corner idx or -1 per drone]},
-#   "fish":      [[3]],             # every fish position
+#   "net":       None | {"rows": int, "cols": int, "nodes": [[3] * rows*cols], "held": [int corner or -1 per drone]},
+#   "fish":      [[3]],
+#   "animals":   [{"name": str, "type": "whale"|"dolphin"|"turtle", "pos": [3], "vel": [3], "radius": float,
+#                  "tangled": bool}],
 #   "lidar":     {"nir": [[3]], "green": [[3]]},   # world-frame hit points of drone 0
 #   "shield_hits": int, "wind": [3]
 # }
 # perturb kinds: "drop_obstacle" (pos), "gust" (vec, duration), "waves" (scale),
-#                "move_payload" (pos), "disable_drone" (agent).
+#                "move_payload" (pos, item), "disable_drone" (agent), "tide" (offset).
+
+# ---------------------------------------------------------------- entity names (anchors, language layer)
+# env.entity_names() returns a fixed list per scene; env.entity_descriptions() describes each
+# for world 0 (type, position, "(inactive)" for unused slots).
+#   trash:    item_0 .. item_{MAX_ITEMS-1} and item_i.handle (graspable objects, trash and not),
+#             "bin" (drop-off: garbage truck in a city world, trash bin on terrain), "nofly_0",
+#             obstacle_0 .. obstacle_7 (nearest boxes: buildings, cars ...), "drone_0"
+#   delivery: item_0 and item_0.handle (the organ cooler), "pad_pickup", "pad_dropoff",
+#             "nofly_0", "nofly_1", "drone_0"
+#   ocean:    net.corner_0 .. net.corner_3, net.center, "boat", fish_school_0 .., "nofly_0",
+#             whale_0, dolphin_0, dolphin_1, turtle_0, turtle_1, drone_0 .. drone_{OCEAN_AGENTS-1}
+#   world:    everything: item_i and item_i.handle, "bin" (garbage truck in town), "pad_pickup",
+#             "pad_dropoff", "boat", "nofly_0", "nofly_1", net.corner_0 .. 3, net.center,
+#             fish_school_i, the animals, obstacle_0 .. obstacle_7, drone_0 .. drone_2
+# Zone slots, the same in every scene (unused slots are inactive):
+ZONE_SLOT = {"bin": 0, "nofly_0": 1, "nofly_1": 2, "pad_pickup": 3, "pad_dropoff": 4, "boat": 5}
+N_ZONES = 6
+N_NAMED_OBSTACLES = 8

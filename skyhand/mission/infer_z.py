@@ -72,9 +72,9 @@ def avoid_z(B: Callable, g_goal: torch.Tensor, g_forbidden: torch.Tensor, lam: f
 
 
 def mission_z(mission, B: Callable, g_samples: torch.Tensor, step: Optional[int] = None,
-              center: bool = False) -> torch.Tensor:
-    """reward_to_z for a MissionSpec (or one of its steps)."""
-    expr = mission.stage(step).reward if hasattr(mission, "stage") else mission
+              center: bool = False, agent: Optional[int] = None) -> torch.Tensor:
+    """reward_to_z for a MissionSpec (or one of its steps; agent picks a drone's own sub-mission)."""
+    expr = mission.stage(step, agent).reward if hasattr(mission, "stage") else mission
     return reward_to_z(expr, B, g_samples, center=center)
 
 

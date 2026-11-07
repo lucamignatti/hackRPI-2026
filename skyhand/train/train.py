@@ -1,6 +1,6 @@
 """FB-CPR / SF pretraining entry point (PLAN.md 7.3).
 
-    python -m skyhand.train.train --scene trash|ocean|both --backend torch|genesis \
+    python -m skyhand.train.train --scene trash|delivery|ocean|all --backend torch|genesis \
         --num-envs 1024 --device cuda --steps 100000 --out runs/NAME [--method sf] \
         [--set key=value ...]
 
@@ -36,6 +36,11 @@ from .zsample import WorldZ
 EXPERT_ERRORS = (NotImplementedError, AttributeError, ImportError)
 
 
+def scene_list(scene: str) -> List[str]:
+    """Scenes to train on: one, or every scene for "all" (and the older alias "both")."""
+    return list(spec.SCENES) if scene in ("all", "both") else [scene]
+
+
 def try_expert(env) -> Optional[torch.Tensor]:
     try:
         return env.expert_action()
@@ -47,10 +52,21 @@ def random_actions(n: int, a: int, device) -> torch.Tensor:
     return torch.rand(n, a, spec.ACTION_DIM, device=device) * 2.0 - 1.0
 
 
+def first_worlds(n: int, frac: float, device) -> torch.Tensor:
+    """Fixed mask of the first round(frac * n) worlds. Fixed, so the expert's phase
+    machine drives the same worlds every step and its episodes stay coherent."""
+    k = int(round(max(0.0, min(1.0, frac)) * n))
+    mask = torch.zeros(n, dtype=torch.bool, device=device)
+    mask[:k] = True
+    return mask
+
+
 class _Stream:
-    def __init__(self, idx: int, env, world_offset: int, wz: WorldZ):
+    def __init__(self, idx: int, env, world_offset: int, wz: WorldZ, warm_frac: float, expert_frac: float):
         self.idx, self.env, self.world_offset, self.wz = idx, env, world_offset, wz
         self.obs = env.reset()
+        self.warm_expert = first_worlds(env.num_envs, warm_frac, env.device)
+        self.train_expert = first_worlds(env.num_envs, expert_frac, env.device)
 
 
 class Trainer:
@@ -63,7 +79,7 @@ class Trainer:
         bdev = cfg.buffer_device or cfg.device
         self.buffer = ReplayBuffer(cfg.buffer_capacity, d, bdev)
         self.demo = DemoStore(cfg.demo_capacity, cfg.demo_seg_len, self.device)
-        scenes = ["trash", "ocean"] if cfg.scene == "both" else [cfg.scene]
+        scenes = scene_list(cfg.scene)
         self.streams: List[_Stream] = []
         off = 0
         for i, sc in enumerate(scenes):
@@ -72,9 +88,9 @@ class Trainer:
                            enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
                            enable_gusts=cfg.enable_gusts)
             wz = WorldZ(cfg.num_envs, self.agent.learner.zs, cfg.z_resample_steps, self.device)
-            self.streams.append(_Stream(i, env, off, wz))
+            self.streams.append(_Stream(i, env, off, wz, cfg.warm_expert_frac, cfg.expert_world_frac))
             off += cfg.num_envs
-        self.demo_envs = {}
+        self.demo_envs = {}            # scene -> expert env that keeps running between collections
         self.expert_ok = True
         self.iter = 0
         self.env_steps = 0
@@ -94,17 +110,23 @@ class Trainer:
     def env_step(self, st: _Stream, warm: bool) -> Dict[str, float]:
         env, cfg = st.env, self.cfg
         n, a = env.num_envs, env.num_agents
+        use = st.warm_expert if warm else st.train_expert
         if warm:
             act = random_actions(n, a, env.device)
-            ex = try_expert(env) if self.expert_ok else None
-            if ex is not None:
-                use = torch.rand(n, device=env.device) < cfg.warm_expert_frac
-                act = torch.where(use.view(n, 1, 1), ex.to(env.device).float(), act)
         else:
             act = self.agent.act(st.obs, st.wz.z, noise=cfg.expl_noise).to(env.device)
+        expert = torch.zeros(n, dtype=torch.bool, device=env.device)
+        if self.expert_ok and use.any():
+            ex = try_expert(env)
+            if ex is None:
+                self.expert_ok = False
+            else:
+                act = torch.where(use.view(n, 1, 1), ex.to(env.device).float(), act)
+                expert = use
         out = env.step(act)
         reset = out.done | out.truncated
-        self.buffer.add(st.obs, act, out.obs, out.done, reset, st.wz.z, st.world_offset, stream=st.idx)
+        self.buffer.add(st.obs, act, out.obs, out.done, reset, st.wz.z, st.world_offset, stream=st.idx,
+                        expert=expert)
         if reset.any():
             st.obs = env.reset(torch.nonzero(reset).squeeze(-1))
         else:
@@ -112,19 +134,28 @@ class Trainer:
         st.wz.step(self._encode, self.buffer, self.demo)
         self.env_steps += n * a
         ev = out.events
-        return {"collision_rate": ev["collision"].float().mean().item(),
-                "shield_rate": ev["shield"].float().mean().item(),
-                "done_rate": out.done.float().mean().item()}
+        pol = ~expert                                  # rates for policy-flown worlds only
+        n_pol = max(int(pol.sum()), 1)
+        return {"collision_rate": float(ev["collision"][pol].float().sum()) / (n_pol * a),
+                "shield_rate": float(ev["shield"][pol].float().sum()) / (n_pol * a),
+                "done_rate": float(out.done[pol].float().sum()) / n_pol,
+                "grasp_rate": float(ev["grasp"][pol].float().sum()) / (n_pol * a),
+                "delivered_rate": float(ev["delivered"][pol].float().sum()) / (n_pol * a)}
 
     @torch.no_grad()
     def collect_demos(self) -> int:
-        """Roll the scripted expert in small separate envs and store g segments."""
+        """Roll the scripted expert in small separate envs and store g segments.
+
+        The demo env is created and reset once, then keeps running between calls, so
+        episodes progress through approach, grasp, carry, and release. The first call
+        runs demo_initial_steps (a full episode); later calls run demo_steps."""
         if not self.expert_ok:
             return 0
         cfg = self.cfg
         added = 0
         for st in self.streams:
             sc = st.env.scene
+            steps = cfg.demo_steps
             if sc not in self.demo_envs:
                 self.demo_envs[sc] = make_env(sc, cfg.demo_envs, cfg.device, backend=cfg.backend,
                                               lidar=False, seed=cfg.seed + 100 + st.idx,
@@ -132,10 +163,10 @@ class Trainer:
                                               rand_drone_dynamics=cfg.rand_drone_dynamics,
                                               enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
                                               enable_gusts=cfg.enable_gusts)
+                steps = max(cfg.demo_steps, cfg.demo_initial_steps)
             env = self.demo_envs[sc]
-            obs = env.reset()
-            gs, cuts = [], []
-            for _ in range(cfg.demo_steps):
+            gs, cuts, bads = [], [], []
+            for _ in range(steps):
                 ex = try_expert(env)
                 if ex is None:
                     self.expert_ok = False
@@ -144,11 +175,15 @@ class Trainer:
                     return added
                 out = env.step(ex)
                 reset = out.done | out.truncated
-                gs.append(out.obs["g"].reshape(env.num_envs * env.num_agents, -1))
+                g_now = out.obs["g"].reshape(env.num_envs * env.num_agents, -1)
+                gs.append(g_now)
                 cuts.append(reset.view(-1, 1).expand(-1, env.num_agents).reshape(-1))
+                # never show the discriminator bycatch or crashes as expert behaviour
+                bads.append((spec.g_field(g_now, "bycatch").squeeze(-1) > 0.5) |
+                            (spec.g_field(g_now, "collision").squeeze(-1) > 0.5))
                 if reset.any():
                     env.reset(torch.nonzero(reset).squeeze(-1))
-            added += self.demo.add_rollout(torch.stack(gs), torch.stack(cuts))
+            added += self.demo.add_rollout(torch.stack(gs), torch.stack(cuts), torch.stack(bads))
         return added
 
     # -------------------------------------------------- evaluation
@@ -157,7 +192,7 @@ class Trainer:
         """Run evaluation rollouts on clean/configured eval environments."""
         cfg = self.cfg
         steps = steps or cfg.eval_steps
-        scenes = ["trash", "ocean"] if cfg.scene == "both" else [cfg.scene]
+        scenes = scene_list(cfg.scene)
         tot_col, tot_sh, tot_done, count = 0.0, 0.0, 0.0, 0
         if not hasattr(self, "eval_envs"):
             self.eval_envs = {}
@@ -295,7 +330,8 @@ def _coerce(field: dataclasses.Field, s: str):
 def parse_args(argv: Optional[List[str]] = None) -> Config:
     p = argparse.ArgumentParser(prog="python -m skyhand.train.train", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--scene", choices=["trash", "ocean", "both"], default="trash")
+    p.add_argument("--scene", choices=list(spec.SCENES) + ["all", "both"], default="trash",
+                   help="one scene, or all of them ('both' is kept as an alias for all)")
     p.add_argument("--backend", choices=["torch", "genesis"], default="torch")
     p.add_argument("--num-envs", type=int, default=None)
     p.add_argument("--device", default=None, help="cuda | cpu | mps")

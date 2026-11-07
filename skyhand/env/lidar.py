@@ -109,7 +109,9 @@ class LidarModel:
         """origin [N, A, 3], quat [N, A, 4].
 
         geom keys (all optional): box_c, box_h [N, B, 3], box_active [N, B];
-        sph_c [N, S, 3], sph_r [N, S], sph_active [N, S]; ground_z [N].
+        sph_c [N, S, 3], sph_r [N, S], sph_active [N, S]; ground_z [N];
+        terrain: callable (o [N, R, 3], d [N, R, 3]) -> distance [N, R] (heightfield).
+        waves: any water model with height(xy, t) and ray_hit(o, d, t) (ocean waves or lakes).
         solid_range: [N, A, V*H] distances from an external raycaster (Genesis),
         used in place of boxes/ground; spheres here are still tested.
 
@@ -158,6 +160,8 @@ class LidarModel:
                 solid = torch.minimum(solid, ray_aabb(o, d, geom["box_c"], geom["box_h"], geom.get("box_active")))
             if "ground_z" in geom:
                 solid = torch.minimum(solid, ray_plane_z(o, d, geom["ground_z"]))
+            if "terrain" in geom:
+                solid = torch.minimum(solid, geom["terrain"](o, d))
         if "sph_c" in geom:
             solid = torch.minimum(solid, ray_spheres(o, d, geom["sph_c"], geom["sph_r"], geom.get("sph_active")))
         solid = torch.where(solid > spec.LIDAR_MAX_RANGE, torch.full_like(solid, NO_RETURN), solid)

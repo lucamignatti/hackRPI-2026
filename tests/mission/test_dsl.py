@@ -27,8 +27,9 @@ def point_vec(g, name):
     return g[:, S["anchor_rel_drone"]][:, 3 * k:3 * k + 3]
 
 
-FIELD_SCALARS = ["speed", "tilt", "height", "thrust", "grip_closed", "holding", "held_mass", "swing", "jerk",
-                 "obstacle_dist", "obstacle_closing", "net_stretch", "fish_in_net", "mate_dist", "collision", "shield"]
+FIELD_SCALARS = ["speed", "tilt", "height", "over_water", "thrust", "grip_closed", "holding", "held_mass",
+                 "payload_is_trash", "swing", "jerk", "obstacle_dist", "obstacle_closing", "trash_left", "net_stretch",
+                 "fish_in_net", "animal_dist", "bycatch", "mate_dist", "collision", "shield"]
 
 
 @pytest.mark.parametrize("name", FIELD_SCALARS)
@@ -122,6 +123,11 @@ def test_batched_shapes():
     "[x for x in range(3)]", "'hello'", "foo + 1", "speed ** holding", "speed ** 100", "speed ** 0.5",
     "dist(drone)", "dist(speed, a1)", "inside(drone)", "payload + 1", "exp", "min(speed)", "open('f')",
     "speed if", "", "abs(x=1)", "eval('1')", "f'{speed}'", "1e300", "speed @ speed", "speed // 2",
+    # payload_is: the only string literal, and only a known item type
+    "payload_is('rocket')", "payload_is(speed)", "payload_is('pizza_box', 'ball')", "payload_is(x='ball')",
+    "payload_is()", "payload_is(b'ball')", "payload_is(f'ball')", "'pizza_box'", "payload_is('ball') + 'ball'",
+    "dist('a0', a1)", "where('ball', 1, 0)", "payload_is", "payload_is('Pizza_Box')", "payload_is(pizza_box)",
+    "payload_is('pizza_box'.upper())",
 ])
 def test_rejections(bad):
     with pytest.raises(DSLError):
@@ -136,5 +142,54 @@ def test_error_lists_allowed_names():
 
 def test_vocabulary_doc():
     doc = describe_vocabulary()
-    for n in list(SCALARS) + list(POINTS) + ["dist", "inside", "where"]:
+    for n in list(SCALARS) + list(POINTS) + ["dist", "inside", "where", "payload_is"] + list(spec.ITEM_TYPES):
         assert n in doc
+    for n in ("over_water", "payload_is_trash", "trash_left", "animal_dist", "bycatch"):
+        assert n in SCALARS
+
+
+def test_new_scalars_hand_built():
+    g = torch.zeros(3, spec.G_DIM)
+    g[:, S["bycatch"]] = torch.tensor([[0.0], [1.0], [0.0]])
+    g[:, S["animal_dist"]] = torch.tensor([[2.0], [0.5], [20.0]])
+    g[:, S["trash_left"]] = torch.tensor([[1.0], [0.5], [0.0]])
+    g[1, S["over_water"]] = 1.0
+    g[2, S["payload_is_trash"]] = 1.0
+    f = lambda e: compile_reward(e)(g).tolist()
+    assert f("-5*bycatch + 0.2*min(animal_dist, 5)") == pytest.approx([0.4, -4.9, 1.0])
+    assert f("trash_left < 0.01") == [0, 0, 1]
+    assert f("over_water") == [0, 1, 0]
+    assert f("2*holding*(1 - payload_is_trash)") == [0, 0, 0]
+    assert f("1 - payload_is_trash") == [1, 1, 0]
+
+
+@pytest.mark.parametrize("k,typ", list(enumerate(spec.ITEM_TYPES)))
+def test_payload_is_each_type(k, typ):
+    g = torch.zeros(len(spec.ITEM_TYPES) + 1, spec.G_DIM)
+    for i in range(len(spec.ITEM_TYPES)):
+        g[i, S["payload_type"].start + i] = 1.0      # row i holds type i; last row: no payload type (net / none)
+    for q in ("'", '"'):
+        out = compile_reward(f"payload_is({q}{typ}{q})")(g)
+        expect = torch.zeros(len(spec.ITEM_TYPES) + 1)
+        expect[k] = 1.0
+        assert torch.equal(out, expect)
+
+
+def test_payload_is_in_reward():
+    g = torch.zeros(2, spec.G_DIM)
+    g[:, S["holding"]] = 1.0
+    g[0, S["payload_type"].start + spec.ITEM_TYPES.index("pizza_box")] = 1.0
+    g[1, S["payload_type"].start + spec.ITEM_TYPES.index("backpack")] = 1.0
+    r = compile_reward("3 - 2*holding*(1 - payload_is('pizza_box')) + where(payload_is('backpack'), -1, 0)")
+    assert r(g).tolist() == [3.0, 0.0]
+    assert "payload_is" in r.names and r.anchors_used == []
+    assert compile_reward("payload_is('ball') and holding")(g).tolist() == [0.0, 0.0]
+
+
+def test_payload_is_error_message_lists_types():
+    with pytest.raises(DSLError) as e:
+        compile_reward("payload_is('rocket')")
+    assert "pizza_box" in str(e.value) and "flower_pot" in str(e.value)
+    with pytest.raises(DSLError) as e:
+        compile_reward("'hello'")
+    assert "strings are not allowed" in str(e.value)

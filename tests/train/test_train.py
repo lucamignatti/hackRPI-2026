@@ -435,3 +435,74 @@ def test_py39_compat_and_no_genesis():
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
                 assert not any("genesis" in n for n in names), f.name
+
+
+# ============================================================ review fixes
+def test_demos_include_grasp_and_carry(tmp_path):
+    """Demo env keeps running across collections, so demos reach the grasp and carry phases."""
+    from skyhand.train.train import Trainer
+    cfg = tiny_config(scene="trash", out=str(tmp_path), demo_envs=16, demo_initial_steps=400,
+                      demo_steps=64, demo_capacity=8192)
+    tr = Trainer(cfg)
+    tr.collect_demos()
+    tr.collect_demos()
+    segs = tr.demo.segs[: len(tr.demo)]
+    holding = spec.g_field(segs, "holding").squeeze(-1)
+    assert holding.mean() > 0.05, f"only {holding.mean():.1%} of demo states hold the payload"
+    # the second call continued the same episodes instead of resetting them
+    assert int(tr.demo_envs["trash"].steps.max()) > 64
+
+
+def test_fb_q_loss_matches_formula():
+    from skyhand.train.fb_cpr import fb_q_loss
+    torch.manual_seed(0)
+    Fz = torch.randn(2, 5)
+    Bz, tFz = torch.randn(5), torch.randn(5)
+    done = torch.tensor([0.0, 1.0, 0.0, 0.0, 1.0])
+    y = Bz + 0.9 * (1 - done) * tFz
+    ref = sum(((Fz[k] - y) ** 2).mean() for k in range(2))
+    assert torch.allclose(fb_q_loss(Fz, Bz, tFz, done, 0.9), ref)
+
+
+def test_aux_loss_reported_and_switchable():
+    torch.manual_seed(0)
+    env = make_env("trash", 4, lidar=False)
+    _, batch = _batch_from_env(env, 32)
+    m = FBCPR(tiny_config()).update(batch)
+    assert math.isfinite(m["fb_q_loss"]) and m["fb_q_loss"] > 0
+    m0 = FBCPR(tiny_config(q_loss_coef=0.0)).update(batch)
+    assert m0["fb_q_loss"] == 0.0
+
+
+def test_critic_queries_depend_on_action(trash_obs):
+    _, obs = trash_obs
+    o = _flat(obs)
+    z = nets.sphere(torch.randn(4, 16))
+    crit = nets.Critic(16, 16, width=32, heads=2, blocks=1, n_queries=4)
+    assert crit.aproj is not None
+    assert nets.Actor(16, width=32, heads=2, blocks=1, n_queries=4).aproj is None
+    a = torch.zeros(4, spec.ACTION_DIM, requires_grad=True)
+    (crit(o, z, a) * z).sum().backward()
+    assert a.grad.abs().sum() > 0
+    old = nets.Critic(16, 16, width=32, heads=2, blocks=1, n_queries=4, action_queries=False)
+    assert old.aproj is None
+
+
+def test_expert_worlds_flagged_and_excluded_from_disc_negatives(tmp_path):
+    from skyhand.train.train import Trainer
+    cfg = tiny_config(scene="trash", out=str(tmp_path), num_envs=4, expert_world_frac=0.5,
+                      warm_expert_frac=0.5, batch_size=16)
+    tr = Trainer(cfg)
+    for _ in range(6):
+        tr.env_step(tr.streams[0], warm=False)
+    flags = tr.buffer.expert[: len(tr.buffer)]
+    assert flags.any() and (~flags).any()
+    assert flags.float().mean() == pytest.approx(0.5)
+    # a batch made only of expert transitions: no discriminator step, but the update still runs
+    tr.collect_demos()
+    batch = tr.buffer.sample(16)
+    batch["expert"] = torch.ones_like(batch["expert"])
+    m = tr.agent.update(batch, tr.demo)
+    assert m["d_loss"] == 0.0 and all(math.isfinite(v) for v in m.values())
+    batch["expert"] = torch.zeros_like(batch["expert"])
+    assert tr.agent.update(batch, tr.demo)["d_loss"] > 0.0

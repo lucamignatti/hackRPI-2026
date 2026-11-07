@@ -17,7 +17,7 @@ from skyhand import spec
 ANCHOR_NAMES = tuple(f"a{k}" for k in range(spec.N_ANCHORS))
 SCALAR_FIELDS = tuple(n for n, s in spec.G_FIELD_SIZES.items() if s == 1)
 BODIES = ("drone", "payload")
-FUNCS = ("dist", "inside", "abs", "min", "max", "clamp", "exp")
+FUNCS = ("dist", "distxy", "inside", "abs", "min", "max", "clamp", "exp")
 
 
 class RewardSyntaxError(ValueError):
@@ -112,20 +112,21 @@ def _eval(node, g):
         return torch.where(c, f(_eval(node.body, g)), f(_eval(node.orelse, g)))
     if isinstance(node, ast.Call):
         name, args = node.func.id, node.args
-        if name == "dist":
+        if name in ("dist", "distxy"):
             if len(args) != 2:
-                raise RewardSyntaxError("dist takes 2 arguments")
+                raise RewardSyntaxError(f"{name} takes 2 arguments")
             x, y = args
+            dims = 2 if name == "distxy" else 3                  # distxy: horizontal distance
             names = [getattr(x, "id", None), getattr(y, "id", None)]
             if set(names) == {"drone", "payload"}:
-                return spec.g_field(g, "payload_rel").norm(dim=-1)
+                return spec.g_field(g, "payload_rel")[..., :dims].norm(dim=-1)
             if names[0] in BODIES and names[1] in ANCHOR_NAMES:
-                return _rel(g, names[0], _anchor_idx(y)).norm(dim=-1)
+                return _rel(g, names[0], _anchor_idx(y))[..., :dims].norm(dim=-1)
             if names[1] in BODIES and names[0] in ANCHOR_NAMES:
-                return _rel(g, names[1], _anchor_idx(x)).norm(dim=-1)
+                return _rel(g, names[1], _anchor_idx(x))[..., :dims].norm(dim=-1)
             if names[0] in ANCHOR_NAMES and names[1] in ANCHOR_NAMES:
-                return (_rel(g, "drone", _anchor_idx(x)) - _rel(g, "drone", _anchor_idx(y))).norm(dim=-1)
-            raise RewardSyntaxError("dist(drone|payload|aK, aK)")
+                return (_rel(g, "drone", _anchor_idx(x)) - _rel(g, "drone", _anchor_idx(y)))[..., :dims].norm(dim=-1)
+            raise RewardSyntaxError(f"{name}(drone|payload|aK, aK)")
         if name == "inside":
             if len(args) != 1:
                 raise RewardSyntaxError("inside takes 1 argument")
@@ -171,6 +172,9 @@ _FIELD_WORDS = {
     "thrust": "thrust use", "speed": "speed", "height": "height", "collision": "collisions",
     "shield": "safety-shield interventions", "net_stretch": "net stretch", "fish_in_net": "fish inside the net",
     "obstacle_dist": "distance to obstacles", "mate_dist": "distance to teammates", "grip_closed": "closed gripper",
+    "payload_is_trash": "carrying trash", "trash_left": "trash left on the ground", "bycatch": "animals tangled in the net",
+    "animal_dist": "distance from the net to marine animals", "over_water": "flying over water",
+    "held_mass": "carried mass",
 }
 
 
@@ -195,8 +199,9 @@ def _terms(node, sign=1.0, out=None):
 
 def _describe(node, anchors: Dict[str, str]) -> str:
     an = lambda n: f"{n.id} ({anchors.get(n.id, 'unbound')})" if isinstance(n, ast.Name) and n.id in ANCHOR_NAMES else _src(n)
-    if isinstance(node, ast.Call) and node.func.id == "dist" and len(node.args) == 2:
-        return f"distance from the {_src(node.args[0])} to {an(node.args[1])}"
+    if isinstance(node, ast.Call) and node.func.id in ("dist", "distxy") and len(node.args) == 2:
+        what = "horizontal distance" if node.func.id == "distxy" else "distance"
+        return f"{what} from the {_src(node.args[0])} to {an(node.args[1])}"
     if isinstance(node, ast.Call) and node.func.id == "inside" and node.args:
         return f"being inside {an(node.args[0])}"
     if isinstance(node, ast.Name):
@@ -222,13 +227,16 @@ def explain(reward: str, done_when: Optional[str], anchors: Dict[str, str], stri
     for sign, node in _terms(tree):
         w = 1.0
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
-            if isinstance(node.left, ast.Constant):
+            neg = lambda n: isinstance(n, ast.UnaryOp) and isinstance(n.op, ast.USub) and isinstance(n.operand, ast.Constant)
+            if neg(node.left):
+                w, node = -float(node.left.operand.value), node.right
+            elif isinstance(node.left, ast.Constant):
                 w, node = float(node.left.value), node.right
             elif isinstance(node.right, ast.Constant):
                 w, node = float(node.right.value), node.left
         s = sign * w
         what = _describe(node, anchors)
-        if isinstance(node, ast.Call) and node.func.id == "dist":
+        if isinstance(node, ast.Call) and node.func.id in ("dist", "distxy"):
             lines.append(("Minimise " if s < 0 else "Maximise ") + what + f" (weight {abs(s):g})")
         else:
             lines.append(("Reward " if s > 0 else "Penalise ") + what + f" (weight {abs(s):g})")

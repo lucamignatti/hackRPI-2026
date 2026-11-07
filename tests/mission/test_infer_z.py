@@ -5,8 +5,9 @@ import math
 import torch
 
 from skyhand import spec
-from skyhand.env.core import make_env
 from skyhand.mission import TextToZ, avoid_z, build_dataset, cem_refine, goal_z, reward_to_z
+
+from mission_fakes import PointMassEnv
 
 D = 8
 
@@ -51,10 +52,8 @@ def toy_policy(obs, z):
 
 
 def test_cem_refine_improves():
-    env = make_env("trash", 16, lidar=False, shield=False)
+    env = PointMassEnv(16, start=(1.0, -2.0, 2.0))
     target = env.pos[0, 0].clone() + torch.tensor([5.0, 3.0, 1.0])
-    target[2] = target[2].clamp(1.5, 6.0)
-    target[:2] = target[:2].clamp(-12, 12)
     b = [spec.AnchorBinding(kind="point", point=target.tolist())] + [spec.AnchorBinding(kind="none")] * 3
     toward = target - env.pos[0, 0]
     side = torch.cross(toward, torch.tensor([0.0, 0.0, 1.0]), dim=0)   # perpendicular start direction

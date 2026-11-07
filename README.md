@@ -1,6 +1,6 @@
 # SkyHand
 
-One drone brain, any mission. A zero-shot behavioral foundation model for a gripper drone with a dual-wavelength LiDAR, built at HackRPI 2026 ("In The Clouds"). You type a mission, an LLM turns it into a reward program, the reward becomes a latent task vector z, and the same frozen network flies it. Highlighted missions: NYC trash pickup, organ delivery, and multi-drone net fishing.
+One drone brain, any mission. A zero-shot behavioral foundation model for a gripper drone with a dual-wavelength LiDAR, built at HackRPI 2026 ("In The Clouds"). You type a mission, an LLM turns it into a reward program, the reward becomes a latent task vector z, and the same frozen network flies it. Three scenes: NYC-style trash pickup (city streets and natural terrain with lakes), long-range organ delivery between remote clinics (Zipline-style, rural Africa), and multi-drone net fishing among fish schools, whales, dolphins, and turtles. FB pretrains in a fourth, generic `world` scene that contains all of them at once, so each mission is a subset of the world it learned.
 
 The full design, paper notes, and timeline are in [PLAN.md](PLAN.md).
 
@@ -9,7 +9,7 @@ The full design, paper notes, and timeline are in [PLAN.md](PLAN.md).
 | Path | What it is |
 |---|---|
 | `skyhand/spec.py` | The shared contract: observation keys and shapes, goal-space layout g, anchors, env API. Change it only as a team |
-| `skyhand/env/` | Environments. `core.py` is the env and the pure-PyTorch physics backend; `backends/genesis_backend.py` is the Genesis backend. Shared pieces: `controller.py`, `waves.py`, `net.py`, `fish.py`, `lidar.py`, `shield.py`, `expert.py` |
+| `skyhand/env/` | Environments. `core.py` is the env and the pure-PyTorch physics backend; `scenes.py` generates city, litter, and delivery layouts; `terrain.py` is the heightfield with lakes and tide; `animals.py`, `items.py`; `backends/genesis_backend.py` is the Genesis backend. Shared pieces: `controller.py`, `waves.py`, `net.py`, `fish.py`, `lidar.py`, `shield.py`, `expert.py` |
 | `skyhand/train/` | FB-CPR learner (off-policy), SF fallback, cross-attention networks, replay buffer, z sampling, `Agent`, training CLI |
 | `skyhand/mission/` | Reward DSL, Gemini mission compiler with offline fallback, z inference, CEM refinement, tiny text-to-z model |
 | `demo/` | Judge demo: FastAPI server and three.js web viewer |
@@ -50,8 +50,9 @@ On the RTX 5080 install a PyTorch build for CUDA 12.8 or newer.
 
 ## Training
 ```bash
-python -m skyhand.train.train --scene both --backend torch --device cuda --num-envs 2048 --steps 200000 --out runs/first
+python -m skyhand.train.train --scene world --backend torch --device cuda --num-envs 1024 --steps 200000 --out runs/first
 ```
+- `--scene world` is the generic pretraining world (recommended). `trash`, `delivery`, and `ocean` are focused task scenes; `all` trains on every scene.
 - `--method sf` switches to the successor-feature fallback with the same code path.
 - `--backend genesis` trains on Genesis (desktop only).
 - `--set key=value` overrides any field of `skyhand/train/config.py`.
@@ -93,7 +94,7 @@ Each area below can be picked up on its own. Every area lists its folders, its t
    - `d_acc_pos` should rise above 0.5 once the discriminator learns the demos.
    - `collision_rate` should fall.
 4. At the 8:30 PM checkpoint, decide FB or SF. The test: given a reach goal, does the drone fly to the target? If not, rerun with `--method sf`.
-5. Train `--scene both` overnight.
+5. Train `--scene world` overnight (the generic world FB pretrains in).
 
 **Done when:** a checkpoint flies typed reach and pick-and-place missions in the trash scene, and success rates are written down for both scenes.
 
@@ -101,12 +102,12 @@ Each area below can be picked up on its own. Every area lists its folders, its t
 **Folders:** `skyhand/env/`, `tests/env/`
 
 1. Watch the scripted expert in the demo viewer (`--env-expert`) in both scenes, and note anything that looks wrong.
-2. Raise ocean expert delivery above its current 38–41%. Its rollouts are the training demonstrations.
+2. Raise ocean expert delivery above its current 25–31% and cut its bycatch (34–41% of hauls tangle an animal). Its rollouts are the training demonstrations; bycatch and crash segments are already filtered out of them.
 3. Run one checkpoint on both backends and compare success rates. The difference is the sim-to-sim gap reported to judges.
 4. Measure step time with LiDAR on at 2048 worlds. If it is the bottleneck, lower the resolution in `skyhand/spec.py`.
 5. Add a test for every physics change.
 
-**Done when:** both scenes are stable at training scale, the ocean expert delivers fish reliably, and the sim-to-sim gap is measured.
+**Done when:** all three scenes are stable at training scale, the ocean expert delivers fish reliably, and the sim-to-sim gap is measured.
 
 ### Mission layer
 **Folders:** `skyhand/mission/`, `tests/mission/`
@@ -156,8 +157,10 @@ Spend the first 30 minutes reading these as a group, in this order:
 **Environments**
 - Grasping is simplified: a handle within reach and the gripper closing counts as a grab.
 - Ocean physics is tuned for a proof of concept: a light net, shallow fish schools, and caught fish riding with the net.
-- In the Genesis backend, obstacle sizes are fixed per env instance, not per world.
-- Genesis' own raycaster returns the drone's body, so both backends use the shared torch ray caster.
+- Every world has its own terrain, buildings, trees, and items, which a Genesis scene cannot represent, so the Genesis backend only integrates drone rigid bodies. World geometry, contacts, and the LiDAR are shared torch code in both backends.
+- Terrain LiDAR uses Lipschitz-bounded ray marching. It costs most of the env step time when LiDAR is on; measure it at training scale.
+- Delivery runs at a different physical scale: a 600 m arena, up to 18 m/s, 90 s episodes. Actions are normalised per scene, so the same action means a faster speed there.
+- Domain randomisation (wind, gusts, mass, drag) is off by default; sim-to-real is out of scope.
 
 **Training**
 - Never run at full size for long. On an M4 Pro it managed only 70–90 env steps per second.
@@ -193,12 +196,16 @@ Spend the first 30 minutes reading these as a group, in this order:
 - Minimal stack (Python 3.9, PyTorch 2.0.1, no Genesis): 63 tests pass, with the Genesis tests skipped.
 - End to end with a checkpoint: mission compiles, z is inferred, and the policy acts on both backends. The demo server runs in trained-policy mode with a z map.
 
-**Scripted expert success**, used for demonstrations, measured on the torch backend over 32 worlds:
+**Scripted expert success**, used for demonstrations, measured on the torch backend (16–32 worlds, 2–3 seeds):
 
 | Scene | Result |
 |---|---|
-| Trash | 94% grasp, 88% deliver to the bin, 6% crash |
-| Ocean (3 seeds) | 38–41% deliver fish to the boat, 44–47% catch fish, 9–13% end early |
+| Trash, city | 84–97% delivered to the garbage truck |
+| Trash, terrain litter | 94–100% delivered to the bin |
+| Delivery, long range | 81–100% delivered, median 55 s over ~470 m |
+| Ocean | 25–31% deliver fish to the boat, 34–41% bycatch, 9–16% end early |
+| World, three drones on separate tasks | 100% trash to the truck, 100% cooler to the clinic, 100% fly-to-point |
+| World, team net haul | 100% of corners grabbed, 25% deliver fish to the boat, 17% bycatch |
 
 **Measured cost.** A full-size training run on an M4 Pro GPU managed only 70–90 env steps per second, and network updates dominate. Measure on the training GPUs before choosing `--num-envs`, `--batch-size`, and `--updates-per-step`.
 

@@ -71,6 +71,14 @@ All of these are **off-policy**: F, B, and the actor learn from a replay buffer 
 
 ## 5. Environments (Genesis plus our env code)
 
+### 5.00 Environment redesign (Sat afternoon)
+The scenes were rebuilt; skyhand/spec.py and README.md are the current reference.
+- **trash**: each world is a city (street grid of 5–16 m buildings, cars driving lanes, trash piled at the curb NYC-style, a garbage truck as drop-off, hydrants and benches) or natural terrain (rolling hills, lakes with beaches and a tide, trees, rocks, birds) with scattered litter. Items: trash (bag, pizza box, cardboard box, bottle) and non-trash (backpack, ball, flower pot), shaped to be distinguishable on LiDAR. One item is carried at a time.
+- **delivery**: long-range, fast organ delivery between two remote clinics 300–700 m apart in a 600 m arena (hills, mesas, a river valley, lakes, villages of huts, acacias, vultures, wildlife-reserve no-fly zones). Up to 18 m/s, 90 s episodes; the cooler must be set down gently on the pad.
+- **ocean**: as before plus whales, dolphins, and turtles; an animal touching the held net is tangled (bycatch event and g field).
+- **world**: the generic pretraining world, a 400 m map with 3 drones that contains all of the above at once: countryside with hills and lakes, a coastline into open sea (tide plus waves), a town with curbside trash and a garbage truck, two clinics with helipads and the cooler, the boat, net, fish, and animals offshore, trees, rocks, birds, no-fly zones. Each drone follows its own anchors, so a world episode can mix single-drone item tasks with a team net haul. FB pretrains here; the other three scenes are focused presets for evaluation and the demo.
+- Domain randomisation is off by default. The Genesis backend now integrates drone rigid bodies only.
+
 ### 5.0 Status of the spikes (done)
 - Custom drone body: a Genesis box with external wrenches flies, hovers, and tracks velocity (tests/env/test_genesis.py).
 - Per-world grasp: implemented in shared torch code (handle within reach + gripper closing), so it behaves the same in both backends; no Genesis weld needed.
@@ -201,6 +209,7 @@ Critics see privileged state and the actor sees LiDAR, as in BFM-Zero. Cut line:
 ### 7.2 Losses (b = batch, bars = target networks, a' = π(s', z) + clipped noise)
 - **FB measure loss** (Touati, Rapin, Ollivier 2023 eq. 8, twin targets):
   `L_FB = mean_{i≠j} ( F_k(s_i,a_i,z_i)ᵀ B(g'_j) − γ·min_l F̄_l(s'_i,a'_i,z_i)ᵀ B̄(g'_j) )² − 2·mean_i F_k(s_i,a_i,z_i)ᵀ B(g'_i)`
+- **Auxiliary diagonal loss** (eq. 9 / 42, weight 1/d): `mean_i ( F_k(s_i,a_i,z_i)ᵀ z_i − B(g'_i)ᵀ Cov⁺ z_i − γ·min_l F̄_l(s'_i,a'_i,z_i)ᵀ z_i )²`, with B and Cov held fixed. Trains Fᵀz directly on the z it was sampled with.
 - **Orthonormality** (eq. 25 and 26): `L_ortho = mean_{i,j} ( B(g_i)ᵀ B(g_j) )² − mean_i ‖B(g_i)‖² − mean_j ‖B(g_j)‖²`, weight 100 to start.
 - **Discriminator** (Motivo eq. 9): demo states paired with their segment encoding z_τ = mean B(g) are positives. Policy states with their sampled z are negatives. Gradient penalty 10.
 - **Style critic Q_D:** TD on reward log(D/(1−D)).
@@ -211,7 +220,9 @@ Critics see privileged state and the actor sees LiDAR, as in BFM-Zero. Cut line:
 - Each world keeps its z for 100 policy steps (5 s), then resamples. Worlds are staggered.
 - Mixture: 50% demo encodings z_τ, 25% B(g) of random buffer states, 25% uniform on the √d sphere.
 - Exploration noise σ = 0.2 on actor outputs.
-- Warm start: fill the buffer with expert rollouts and random actions. Some expert transitions stay in the buffer.
+- Warm start: fill the buffer with expert rollouts and random actions.
+- Expert worlds: after warm start, a fixed 10% of training worlds keep flying the scripted expert, so grasp and carry transitions with actions keep entering the buffer. They are flagged and excluded from the discriminator's policy negatives.
+- Demonstrations: the expert demo env keeps running between collections (the first collection is a full episode), so demo segments cover grasping and carrying, not only the approach.
 - Each loop: one env step for all worlds, then G gradient steps on batch b. Start with G = 2 and b = 4096.
 - Train one model on both scenes by splitting worlds between them, so a single z space covers trash, organ, and fishing.
 
@@ -296,7 +307,7 @@ class Block(nn.Module):
 ```
 
 ### 8.3 Queries, heads, and sizes
-- Queries: 8 learned base tokens plus a per-query linear projection of z (normalized to √d).
+- Queries: 8 learned base tokens plus a per-query linear projection of z (normalized to √d). In F, Q_D, and Q_R every query also gets a projection of the action, so the action does not depend on one context token to be seen.
 - Head: mean over queries, non-affine LayerNorm, linear to R^d for F, a scalar for Q_D and Q_R, or 5 tanh actions for the actor.
 - B: 3 SwiGLU MLP blocks over g (same pre-norm, 4× hidden, gates), linear to d, L2-normalized to √d. D: same style over g concatenated with z, sigmoid output.
 

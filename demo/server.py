@@ -28,24 +28,54 @@ from fastapi.staticfiles import StaticFiles
 
 from skyhand import spec
 
-from .pipeline import CompiledMission, Pipeline, load_agent
+from .pipeline import CompiledMission, Pipeline, load_agent, observe
 
 log = logging.getLogger("skyhand.demo")
 WEB_DIR = Path(__file__).resolve().parent / "web"
-PERTURB_KINDS = ("drop_obstacle", "gust", "waves", "move_payload", "disable_drone")
-MAX_EPISODE_STEPS = 2 * spec.EPISODE_STEPS          # 60 s of flight per approved mission
+PERTURB_KINDS = ("drop_obstacle", "gust", "waves", "move_payload", "disable_drone", "tide")
+SIM_REAL = "simulator"
+SIM_FAKE = "kinematic preview"
 
 
-def default_make_env(backend: str = "torch", device: str = "cpu", lidar: bool = True, **env_kw):
-    from skyhand.env.core import make_env
+def default_make_env(backend: str = "torch", device: str = "cpu", lidar: bool = True, fake: bool = False, **env_kw):
+    """make_env(scene, num_envs, **kw) factory. fake=True uses demo.fake_env (no physics)."""
+    if fake:
+        from .fake_env import make_fake_env as make_env
+    else:
+        from skyhand.env.core import make_env
 
     def mk(scene: str, num_envs: int, **kw):
         opts = dict(env_kw)
         opts.update(kw)
         opts.setdefault("lidar", lidar)
         opts.setdefault("random_anchors", False)
+        if fake:
+            return make_env(scene, num_envs=num_envs, device=device, **opts)
         return make_env(scene, num_envs=num_envs, device=device, backend=backend, **opts)
     return mk
+
+
+def gusts_enabled(env) -> bool:
+    """Whether env.perturb(..., "gust") has any effect (the env ignores gusts unless enabled)."""
+    if hasattr(env, "gusts_enabled"):
+        return bool(env.gusts_enabled)
+    cfg = getattr(env, "cfg", None)
+    if cfg is None:
+        return False
+    if not getattr(cfg, "domain_rand", True):
+        return False
+    return bool(getattr(cfg, "enable_gusts", False))
+
+
+def _item_index(item) -> Optional[int]:
+    if item is None:
+        return None
+    if isinstance(item, (int, float)):
+        return int(item)
+    m = str(item).split(".")[0]
+    if m.startswith("item_") and m[5:].isdigit():
+        return int(m[5:])
+    raise ValueError(f"item must be an index or item_<i>, got {item!r}")
 
 
 class DemoSession:
@@ -53,7 +83,7 @@ class DemoSession:
 
     def __init__(self, scene: str = "trash", num_envs: int = 1, pipeline: Optional[Pipeline] = None,
                  make_env: Optional[Callable] = None, sample_make_env: Optional[Callable] = None,
-                 seed: Optional[int] = None, max_steps: int = MAX_EPISODE_STEPS):
+                 seed: Optional[int] = None, max_steps: Optional[int] = None):
         self.lock = threading.RLock()
         self.pipeline = pipeline or Pipeline()
         self.make_env = make_env or default_make_env()
@@ -61,9 +91,10 @@ class DemoSession:
         self.sample_make_env = sample_make_env or (lambda sc, n: self.make_env(sc, n, lidar=False))
         self.num_envs = max(1, int(num_envs))
         self.seed = seed
-        self.max_steps = max_steps
+        self._max_steps_arg = max_steps          # None: the env's episode_steps (per scene)
         self._episode = 0
         self.zmap: Dict[str, Any] = {"available": False, "points": [], "note": "z map available after training"}
+        self._build_id = 0
         self._build(scene)
 
     # ------------------------------------------------------------ setup
@@ -75,7 +106,16 @@ class DemoSession:
             kw["seed"] = int(time.time()) % 100000
         self.scene = scene
         self.env = self.make_env(scene, self.num_envs, **kw)
-        self.obs = self.env._obs() if hasattr(self.env, "_obs") else self.env.reset()
+        self.obs = observe(self.env)
+        self._build_id += 1
+        self._terrain: Optional[dict] = None       # last full terrain (with heights), "key" = build:version
+        self._sent_key: Optional[str] = None       # terrain key of the last broadcast frame
+        self._render_kw = 0                         # which render_state keyword this env accepts
+        self.gusts = gusts_enabled(self.env)
+        self.arena_half = float(getattr(self.env, "arena_half", spec.SCENE_ARENA_HALF.get(scene, spec.ARENA_HALF)))
+        self.max_steps = int(self._max_steps_arg or getattr(self.env, "episode_steps",
+                                                           spec.SCENE_EPISODE_STEPS.get(scene, spec.EPISODE_STEPS)))
+        self.sim = SIM_FAKE if getattr(self.env, "is_fake", False) else SIM_REAL
         self.controller = self.pipeline.make_controller(self.env)
         self.pending: Optional[CompiledMission] = None
         self.active: Optional[CompiledMission] = None
@@ -88,6 +128,7 @@ class DemoSession:
         self.reward_sum = 0.0
         self.cem_used = False
         self.last_result: Optional[str] = None
+        self.done_agents: set = set()              # drones whose own done_when held (per-drone missions)
         self.zmap = self.pipeline.zmap(self.sample_make_env, None) if self.pipeline.agent is not None else \
             {"available": False, "points": [], "note": "z map available after training"}
 
@@ -131,7 +172,7 @@ class DemoSession:
             episode = self._episode = self._episode + 1
         z = None
         if self.pipeline.agent is not None:
-            z = self.pipeline.compute_z(m.reward_fn, scene, m.anchors, self.sample_make_env)
+            z = self.pipeline.compute_z(m.reward_fn, scene, m.anchors, self.sample_make_env, mission=m)   # [A, d] per drone
             with self.lock:
                 if self.pipeline.cem and self.env.num_envs > 1:
                     self.status, self.message = "refining z", "Refining z with CEM in cloned worlds..."
@@ -144,10 +185,11 @@ class DemoSession:
             if episode != self._episode or self.scene != scene:
                 return self.info()      # superseded by a reset / scene switch
             self.active, self.pending, self.z, self.zmap = m, None, z, zmap
-            self.obs = self.env._obs()
+            self.obs = observe(self.env)
             if hasattr(self.controller, "reset"):
                 self.controller.reset()
             self.step_count, self.reward_sum, self.reward = 0, 0.0, None
+            self.done_agents = set()
             self.flying, self.status = True, "flying"
             self.last_result = None
             self.message = f"Flying: {m.text}"
@@ -166,11 +208,12 @@ class DemoSession:
             self.obs = self.env.reset()
             if self.active is not None:
                 self.pipeline.bind(self.env, self.active, torch.arange(self.env.num_envs, device=self.env.device))
-                self.obs = self.env._obs()
+                self.obs = observe(self.env)
             if hasattr(self.controller, "reset"):
                 self.controller.reset()
             self.flying = False
             self.step_count, self.reward, self.reward_sum = 0, None, 0.0
+            self.done_agents = set()
             self.status, self.message = "idle", "World reset. Compile a mission (or re-approve) to fly."
             if self.active is not None and self.pending is None:
                 self.pending = self.active
@@ -186,10 +229,13 @@ class DemoSession:
             pos = params.get("pos")
             if not isinstance(pos, (list, tuple)) or len(pos) < 2:
                 raise ValueError("pos [x, y] required")
-            lim = spec.ARENA_HALF
+            lim = self.arena_half
             kw["pos"] = [max(-lim, min(lim, float(pos[0]))), max(-lim, min(lim, float(pos[1])))]
             if kind == "drop_obstacle" and "half" in params:
                 kw["half"] = max(0.2, min(2.0, float(params["half"])))
+            if kind == "move_payload":
+                idx = _item_index(params.get("item"))
+                kw["item"] = self._default_item() if idx is None else max(0, min(spec.MAX_ITEMS - 1, idx))
         elif kind == "gust":
             vec = params.get("vec")
             if vec is None:
@@ -200,6 +246,8 @@ class DemoSession:
             kw["duration"] = max(0.1, min(10.0, float(params.get("duration", 2.0))))
         elif kind == "waves":
             kw["scale"] = max(0.0, min(4.0, float(params.get("scale", 1.5))))
+        elif kind == "tide":
+            kw["offset"] = max(-2.0, min(2.0, float(params.get("offset", 0.0))))
         elif kind == "disable_drone":
             ag = int(params.get("agent", 0))
             if not 0 <= ag < self.env.num_agents:
@@ -207,13 +255,27 @@ class DemoSession:
             kw["agent"] = ag
         with self.lock:
             note = ""
-            if kind == "waves" and self.scene != "ocean":
-                note = "waves only exist in the ocean scene"
-            elif kind == "move_payload" and self.scene != "trash":
-                note = "no payload in the ocean scene"
+            if kind == "waves" and self.scene not in ("ocean", "world"):
+                note = "waves only exist in the ocean and world scenes"
+            elif kind == "tide" and self.scene == "ocean":
+                note = "the tide only moves lakes in terrain worlds (use the wave slider in the ocean)"
+            elif kind == "move_payload" and self.scene == "ocean":
+                note = "no items in the ocean scene"
+            elif kind == "gust" and not self.gusts:
+                note = "gusts are off in this env (start the server with --gusts)"
             self.env.perturb(0, kind, **kw)
-            self.obs = self.env._obs()
+            self.obs = observe(self.env)
         return {"ok": True, "kind": kind, "params": kw, "note": note}
+
+    def _default_item(self) -> int:
+        """Item moved by move_payload when none is given: the one a0 is bound to, else item 0."""
+        m = self.active or self.pending
+        a0 = m.anchors.get("a0") if m is not None else None
+        try:
+            idx = _item_index(a0) if isinstance(a0, str) and a0.startswith("item_") else None
+        except ValueError:
+            idx = None
+        return 0 if idx is None else idx
 
     # ------------------------------------------------------------ simulation
     def _idle_action(self) -> torch.Tensor:
@@ -227,6 +289,8 @@ class DemoSession:
             env = self.env
             if self.flying:
                 act = self.controller(self.obs, self.z)
+                if self.done_agents and self.active is not None and self.active.agents:
+                    act = self._hold_done(act)
             else:
                 act = self._idle_action()
             out = env.step(act)
@@ -237,20 +301,57 @@ class DemoSession:
             m = self.active
             g0 = out.obs["g"][0]
             try:
-                self.reward = float(m.reward_fn(g0[0:1]).reshape(-1)[0])
+                if m.agent_reward_fns:   # per-drone jobs: mean of each drone's own reward
+                    rs = [float(fn(g0[ag:ag + 1]).reshape(-1)[0]) for ag, fn in m.agent_reward_fns.items()
+                          if ag < g0.shape[0]]
+                    self.reward = sum(rs) / max(len(rs), 1)
+                else:
+                    self.reward = float(m.reward_fn(g0[0:1]).reshape(-1)[0])
                 self.reward_sum += self.reward
-                ok = m.done_fn is not None and bool((m.done_fn(g0).reshape(-1) > 0.5).any())
+                ok = self._done(m, g0)
             except Exception as e:  # never kill the loop on a bad program
                 log.warning("reward evaluation failed: %s", e)
                 ok = False
+            delivered = self._is_carry(m) and "delivered" in out.events and bool(out.events["delivered"][0].any())
             if ok:
-                self._finish("success", f"Mission complete in {self.step_count * spec.POLICY_DT:.1f} s.")
+                who = " (every drone reached its goal)" if m.agent_done_fns else ""
+                self._finish("success", f"Mission complete in {self.step_count * spec.POLICY_DT:.1f} s{who}.")
+            elif delivered:
+                self._finish("success", f"Item delivered in {self.step_count * spec.POLICY_DT:.1f} s.")
             elif bool(out.done[0]):
                 why = "collision" if bool(out.events["collision"][0].any()) else \
                     "net torn" if bool(out.events["tear"][0].any()) else "crash / out of bounds"
                 self._finish("failure", f"Episode ended: {why}.")
             elif self.step_count >= self.max_steps:
                 self._finish("timeout", f"Time limit ({self.max_steps * spec.POLICY_DT:.0f} s) reached without completing.")
+
+    def _hold_done(self, act: torch.Tensor) -> torch.Tensor:
+        """A drone that met its own goal (per-drone jobs) holds position while the others work:
+        zero velocity / yaw command, gripper unchanged."""
+        act = act.clone()
+        for ag in self.done_agents:
+            if ag < act.shape[1]:
+                act[:, ag, 0:4] = 0.0
+        return act
+
+    def _done(self, m: CompiledMission, g0: torch.Tensor) -> bool:
+        """Shared mission: any drone meets done_when. Per-drone jobs: every drone with a done_when
+        has met its own at some point (latched in self.done_agents); drones that only stand by do not count."""
+        if not m.agent_done_fns:
+            return m.done_fn is not None and bool((m.done_fn(g0).reshape(-1) > 0.5).any())
+        need = {ag for ag, fn in m.agent_done_fns.items() if fn is not None and ag < g0.shape[0]}
+        for ag in need - self.done_agents:
+            if bool(m.agent_done_fns[ag](g0[ag:ag + 1]).reshape(-1)[0] > 0.5):
+                self.done_agents.add(ag)
+        return bool(need) and need <= self.done_agents
+
+    @staticmethod
+    def _is_carry(m: CompiledMission) -> bool:
+        """Carry missions (a0 = item handle, a1 = drop-off) also succeed on the env's "delivered" event."""
+        if m.agents:
+            return False     # per-drone jobs: one drone's delivery does not end the mission
+        a0, a1 = m.anchors.get("a0"), m.anchors.get("a1")
+        return isinstance(a0, str) and a0.startswith("item_") and a1 in ("bin", "pad_dropoff")
 
     def _finish(self, result: str, msg: str) -> None:
         self.flying = False
@@ -264,7 +365,8 @@ class DemoSession:
                     "num_agents": self.env.num_agents, "num_envs": self.env.num_envs,
                     "mission": self.active.public() if self.active else None,
                     "pending": self.pending.public() if self.pending else None,
-                    "flying": self.flying, "cem": self.pipeline.cem}
+                    "flying": self.flying, "cem": self.pipeline.cem, "gusts": self.gusts, "sim": self.sim,
+                    "scenes": list(spec.SCENES)}
 
     def extras(self) -> dict:
         g = self.obs["g"][0, 0]
@@ -278,13 +380,73 @@ class DemoSession:
             "shield_hits": int(self.env.shield_count[0]) if hasattr(self.env, "shield_count") else 0,
             "swing": float(spec.g_field(g, "swing")[0]), "speed": float(spec.g_field(g, "speed")[0]),
             "step": self.step_count, "max_steps": self.max_steps, "time": self.step_count * spec.POLICY_DT,
-            "result": self.last_result, "z_norm": float(z.norm()) if z is not None else None,
+            "result": self.last_result,
+            "z_norm": (float(z.norm(dim=-1).mean()) if z.dim() == 2 else float(z.norm())) if z is not None else None,
+            "z_per_drone": bool(z is not None and z.dim() == 2),
             "cem_used": self.cem_used, "zmap": self.zmap, "num_agents": self.env.num_agents,
+            "gusts": self.gusts, "sim": self.sim,
+            # drone picker: what each drone is doing, and which per-drone goals are met
+            "agent_tasks": (self.active or self.pending).tasks(self.env.num_agents) if (self.active or self.pending)
+            else [""] * self.env.num_agents,
+            "agents_done": sorted(self.done_agents),
         }
 
-    def frame(self) -> dict:
+    def _render(self) -> dict:
+        """env.render_state(0) with the terrain heights cached here and stripped from the frame.
+
+        state["terrain"] keeps version/res/half and gains "key" (build id + version, unique across
+        scene switches). The full terrain is in self._terrain."""
+        st = self._call_render(False)
+        ter = st.get("terrain")
+        if not ter:
+            self._terrain = None
+            return st
+        key = f"{self._build_id}:{ter.get('version', 0)}"
+        if ter.get("heights") is None and (self._terrain is None or self._terrain["key"] != key):
+            full = self._call_render(True).get("terrain") or {}     # the heights changed: fetch them once
+            if full.get("heights") is not None:
+                ter = full
+                key = f"{self._build_id}:{ter.get('version', 0)}"
+        if ter.get("heights") is not None:
+            self._terrain = dict(ter, key=key)
+        st["terrain"] = {k: v for k, v in ter.items() if k != "heights"}
+        st["terrain"]["key"] = key
+        return st
+
+    def _call_render(self, heights: bool) -> dict:
+        """render_state(0) asking for the heights or not, whichever keyword the env takes
+        (include_terrain=..., spec's send_terrain=..., or none: then the env decides)."""
+        kws = [{"include_terrain": heights}, {"send_terrain": heights}, {}]
+        start = getattr(self, "_render_kw", 0)
+        for i in range(start, len(kws)):
+            try:
+                st = self.env.render_state(0, **kws[i])
+                self._render_kw = i
+                return st
+            except TypeError:
+                if i == len(kws) - 1:
+                    raise
+        raise RuntimeError("unreachable")
+
+    def terrain(self) -> Optional[dict]:
+        """Full terrain (with heights) of the current world, or None (flat ground / ocean)."""
         with self.lock:
-            return {"type": "frame", "state": self.env.render_state(0), "demo": self.extras()}
+            if self._terrain is None:
+                self._render()
+            return self._terrain
+
+    def frame(self, include_terrain: bool = True) -> dict:
+        """One frame. include_terrain=True always attaches the heights; False attaches them
+        only when the terrain changed since the last frame built with False (the broadcast)."""
+        with self.lock:
+            st = self._render()
+            ter = st.get("terrain")
+            if ter and self._terrain is not None and self._terrain["key"] == ter["key"]:
+                if include_terrain or self._sent_key != ter["key"]:
+                    st["terrain"] = self._terrain
+                if not include_terrain:
+                    self._sent_key = ter["key"]
+            return {"type": "frame", "state": st, "demo": self.extras()}
 
 
 class Hub:
@@ -321,7 +483,7 @@ def create_app(session: Optional[DemoSession] = None, speed: float = 1.0, max_fp
             try:
                 await loop.run_in_executor(sim_pool, S().tick)
                 if hub.clients and loop.time() - last_send >= min_send * 0.95:
-                    msg = await loop.run_in_executor(sim_pool, lambda: json.dumps(S().frame()))
+                    msg = await loop.run_in_executor(sim_pool, lambda: json.dumps(S().frame(include_terrain=False)))
                     last_send = loop.time()
                     await hub.broadcast(msg)
             except asyncio.CancelledError:
@@ -404,6 +566,10 @@ def create_app(session: Optional[DemoSession] = None, speed: float = 1.0, max_fp
         params = {k: v for k, v in body.items() if k != "kind"}
         return await run(S().perturb, kind, params)
 
+    @app.get("/api/terrain")
+    async def terrain():
+        return {"terrain": await run(S().terrain)}
+
     @app.get("/api/zmap")
     async def zmap():
         return S().zmap
@@ -414,6 +580,8 @@ def create_app(session: Optional[DemoSession] = None, speed: float = 1.0, max_fp
         hub.clients.append(websocket)
         try:
             await websocket.send_text(json.dumps({"type": "hello", **S().info()}))
+            ter = await run(S().terrain)
+            await websocket.send_text(json.dumps({"type": "terrain", "terrain": ter}))
             while True:
                 txt = await websocket.receive_text()
                 try:
@@ -454,11 +622,15 @@ def main(argv=None) -> None:
     ap.add_argument("--cem-candidates", type=int, default=64)
     ap.add_argument("--env-expert", action="store_true", help="fallback flies env.expert_action() instead of the built-in controller")
     ap.add_argument("--no-lidar", action="store_true")
-    ap.add_argument("--no-domain-rand", action="store_true", help="globally disable domain randomisation")
-    ap.add_argument("--no-rand-dynamics", action="store_true", help="disable drone dynamics randomisation")
-    ap.add_argument("--no-wind", action="store_true", help="disable ambient wind")
-    ap.add_argument("--no-dynamic-wind", action="store_true", help="disable dynamic stochastic wind turbulence")
-    ap.add_argument("--no-gusts", action="store_true", help="disable dynamic gusts")
+    ap.add_argument("--fake-env", action="store_true",
+                    help="kinematic preview env (demo/fake_env.py, no physics; labelled in the UI)")
+    # env options: left unset, the env's own defaults apply (domain randomisation and gusts are off by default)
+    opt = dict(action=argparse.BooleanOptionalAction, default=None)
+    ap.add_argument("--domain-rand", help="domain randomisation on/off", **opt)
+    ap.add_argument("--rand-dynamics", help="drone dynamics randomisation on/off", **opt)
+    ap.add_argument("--wind", help="ambient wind on/off", **opt)
+    ap.add_argument("--dynamic-wind", help="stochastic wind turbulence on/off", **opt)
+    ap.add_argument("--gusts", help="dynamic gusts on/off (the Gust button needs them on)", **opt)
     ap.add_argument("--speed", type=float, default=1.0, help="sim speed multiplier (1 = real time)")
     ap.add_argument("--seed", type=int, default=None)
     args = ap.parse_args(argv)
@@ -467,12 +639,11 @@ def main(argv=None) -> None:
     agent = load_agent(args.checkpoint, args.device)
     pipe = Pipeline(agent=agent, device=args.device, use_env_expert=args.env_expert, cem=args.cem)
     num_envs = max(args.num_envs, args.cem_candidates + 1) if (args.cem and agent is not None) else args.num_envs
-    mk = default_make_env(args.backend, args.device, lidar=not args.no_lidar,
-                          domain_rand=not args.no_domain_rand,
-                          rand_drone_dynamics=not args.no_rand_dynamics,
-                          enable_wind=not args.no_wind,
-                          dynamic_wind=not args.no_dynamic_wind,
-                          enable_gusts=not args.no_gusts)
+    env_kw = {name: val for name, val in (("domain_rand", args.domain_rand),
+                                          ("rand_drone_dynamics", args.rand_dynamics),
+                                          ("enable_wind", args.wind), ("dynamic_wind", args.dynamic_wind),
+                                          ("enable_gusts", args.gusts)) if val is not None}
+    mk = default_make_env(args.backend, args.device, lidar=not args.no_lidar, fake=args.fake_env, **env_kw)
     session = DemoSession(args.scene, num_envs, pipeline=pipe, make_env=mk, seed=args.seed)
     log.info("policy: %s | mission compiler: %s | backend %s on %s | %d worlds",
              pipe.policy_mode, pipe.mission_mode, args.backend, args.device, num_envs)

@@ -13,6 +13,9 @@ Semantics
   a<k> = anchor_rel_drone[k]. dist(p, q) = |q - p|, dz(p, q) = q.z - p.z.
 - Truthiness is ``x > 0.5`` everywhere (comparisons return 0/1 floats,
   ``and``/``or``/``not``/``where`` and done_when use the same threshold).
+- payload_is("pizza_box") is 1.0 when the payload's item type (payload_type one-hot) is that
+  type. Its argument is the ONLY string literal the language accepts and must be one of
+  spec.ITEM_TYPES.
 - Division is guarded (|denominator| >= 1e-6) and the final result is passed
   through nan_to_num, so a program never returns NaN/inf.
 """
@@ -27,7 +30,9 @@ import torch
 from .. import spec
 
 __all__ = ["DSLError", "CompiledReward", "compile_reward", "describe_vocabulary",
-           "SCALARS", "POINTS", "FUNCTIONS", "CONSTANTS"]
+           "SCALARS", "POINTS", "FUNCTIONS", "CONSTANTS", "ITEM_TYPES"]
+
+ITEM_TYPES = tuple(spec.ITEM_TYPES)
 
 MAX_SOURCE_LEN = 2000
 MAX_NODES = 400
@@ -57,17 +62,23 @@ def _comp(name: str, i: int) -> Fn:
 SCALARS: "Dict[str, tuple]" = {
     "speed": (_field1("speed"), "drone speed (m/s)"),
     "tilt": (_field1("tilt"), "drone tilt (rad)"),
-    "height": (_field1("height"), "drone height above ground / waves (m)"),
+    "height": (_field1("height"), "drone height above the terrain or water surface below it (m)"),
+    "over_water": (_field1("over_water"), "1 if the surface below the drone is water (lake / ocean)"),
     "thrust": (_field1("thrust"), "collective thrust / hover thrust (~1 at hover)"),
     "grip_closed": (_field1("grip_closed"), "1 if the gripper is closed"),
-    "holding": (_field1("holding"), "1 if holding a handle (bag/cooler handle or net corner)"),
+    "holding": (_field1("holding"), "1 if holding a handle (an item handle or a net corner)"),
     "held_mass": (_field1("held_mass"), "mass carried (kg)"),
+    "payload_is_trash": (_field1("payload_is_trash"), "1 if the payload is a trash item"),
     "swing": (_field1("swing"), "payload swing rate (rad/s), 0 when not holding"),
     "jerk": (_field1("jerk"), "drone jerk (m/s^3, typically 0-100)"),
     "obstacle_dist": (_field1("obstacle_dist"), "distance from drone surface to nearest obstacle (m)"),
     "obstacle_closing": (_field1("obstacle_closing"), "closing speed toward nearest obstacle (m/s, >0 approaching)"),
+    "trash_left": (_field1("trash_left"), "fraction of this world's trash not yet delivered (trash scene, 0-1)"),
     "net_stretch": (_field1("net_stretch"), "max net edge stretch ratio minus 1 (ocean)"),
     "fish_in_net": (_field1("fish_in_net"), "fraction of fish inside the net (ocean, 0-1)"),
+    "animal_dist": (_field1("animal_dist"), "distance from the nearest marine animal to the net (m, ocean; "
+                                            "large elsewhere)"),
+    "bycatch": (_field1("bycatch"), "1 while a marine animal is tangled in the net (ocean)"),
     "mate_dist": (_field1("mate_dist"), "distance to nearest teammate drone (m)"),
     "collision": (_field1("collision"), "1 on a step with a collision"),
     "shield": (_field1("shield"), "1 on a step where the safety shield intervened"),
@@ -94,7 +105,8 @@ def _point_getter(name: str) -> Callable[[torch.Tensor], Optional[torch.Tensor]]
 
 POINTS: Dict[str, str] = {
     "drone": "the drone itself",
-    "payload": "the payload (trash bag / cooler; in the ocean the net corner the drone holds or is nearest to)",
+    "payload": ("the payload: the item the drone holds, else the item bound to anchor a0, else the nearest item "
+                "(ocean: the net corner held or nearest)"),
     "net": "the fishing net centroid (ocean)",
 }
 for _k in range(spec.N_ANCHORS):
@@ -119,6 +131,8 @@ FUNCTIONS: Dict[str, str] = {
     "log1p": "log1p(x) (x clamped above -1)",
     "tanh": "tanh(x)",
     "where": "where(cond, a, b): a where cond > 0.5 else b",
+    "payload_is": ("payload_is('type'): 1 if the payload's item type is 'type' (a quoted item type: "
+                   + ", ".join(ITEM_TYPES) + ")"),
 }
 
 
@@ -134,7 +148,9 @@ def describe_vocabulary() -> str:
     lines.append("Operators: + - * / ** (constant integer exponent, |n| <= %d), unary -, "
                  "comparisons < <= > >= == != (give 1.0 / 0.0), and, or, not (truthy means > 0.5), "
                  "numeric literals, pi." % MAX_POW)
-    lines.append("Not allowed: attribute access, indexing, strings, lambdas, comprehensions, other names.")
+    lines.append("Item types (only as the quoted argument of payload_is): " + ", ".join(ITEM_TYPES) + ".")
+    lines.append("Not allowed: attribute access, indexing, strings (except the item type in payload_is), lambdas, "
+                 "comprehensions, other names.")
     return "\n".join(lines)
 
 
@@ -339,6 +355,16 @@ class _Compiler:
             self.names.add(a.id)
             col = spec.G_SLICES["anchor_inside"].start + int(a.id[1:])
             return lambda g: g[..., col]
+        if fname == "payload_is":
+            need(1)
+            a = args[0]
+            if not (isinstance(a, ast.Constant) and isinstance(a.value, str)):
+                raise self.err(node, "payload_is() takes one quoted item type: " + ", ".join(ITEM_TYPES))
+            if a.value not in ITEM_TYPES:
+                raise self.err(node, f"unknown item type {a.value!r}; item types: " + ", ".join(ITEM_TYPES))
+            self.names.add("payload_is")
+            col = spec.G_SLICES["payload_type"].start + ITEM_TYPES.index(a.value)
+            return lambda g: (g[..., col] > 0.5).to(g.dtype)
         if fname in _UNARY_FN:
             need(1)
             x, f = self.scalar(args[0]), _UNARY_FN[fname]

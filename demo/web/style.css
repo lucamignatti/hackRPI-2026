@@ -65,13 +65,28 @@ details summary { cursor: pointer; color: var(--muted); margin: 4px 0; }
 .gauge span { font: 600 16px ui-monospace, Menlo, monospace; }
 #mode-banner { position: absolute; bottom: 44px; left: 50%; transform: translateX(-50%); background: var(--warn);
   color: #1d1300; padding: 6px 14px; border-radius: 8px; font-weight: 600; }
-#legend { position: absolute; bottom: 10px; left: 10px; display: flex; gap: 12px; font-size: 12px; color: var(--muted);
+#legend { position: absolute; bottom: 10px; left: 10px; right: 10px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--muted);
   background: rgba(21,27,35,.75); padding: 4px 10px; border-radius: 8px; }
 #legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
-body.scene-trash .ocean-only { display: none; }
-body.scene-ocean .trash-only { display: none; }
+/* scene-specific controls: an element shows if it carries the class of the current scene */
+body.scene-trash .ocean-only:not(.trash-only), body.scene-trash .delivery-only:not(.trash-only) { display: none; }
+body.scene-delivery .ocean-only:not(.delivery-only), body.scene-delivery .trash-only:not(.delivery-only) { display: none; }
+body.scene-ocean .trash-only:not(.ocean-only), body.scene-ocean .delivery-only:not(.ocean-only), body.scene-ocean .not-ocean { display: none; }
+body:not(.has-lake) .lake-only { display: none; }
+#legend i.ring { background: transparent; border: 2px solid; border-radius: 50%; width: 9px; height: 9px; }
+.gauge.alert { background: #3b1218; border-color: #ff2d3d; }
+.gauge.alert span { color: #ff97a1; }
+#tip { position: absolute; pointer-events: none; background: rgba(10,14,20,.9); border: 1px solid var(--line); border-radius: 6px;
+  padding: 3px 8px; font-size: 12px; white-space: nowrap; z-index: 5; }
+.seg button { padding: 8px 6px; }
 @media (max-width: 900px) {
   #app { flex-direction: column; height: auto; }
   #viewport { height: 60vh; }
   #panel { width: 100%; border-left: none; }
 }
+/* follow camera drone picker, per-drone jobs on the mission card */
+.seg.picker { margin-top: 8px; }
+.seg.picker button { font-size: 12.5px; }
+#card-agents > div { font-size: 12.5px; margin: 6px 0; }
+#card-agents .sub { color: var(--muted); margin: 2px 0; }
+#card-agents code { margin-top: 3px; }

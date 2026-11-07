@@ -33,6 +33,7 @@ class Config:
     disc_width: int = 256
     disc_blocks: int = 3
     actor_priv: bool = False           # cut line (PLAN 7.1): give the actor privileged tokens too
+    action_queries: bool = True        # critics: add an action embedding to every query, not only an action token
 
     # ------------------------------------------------------------ optimisation (PLAN 7.4)
     gamma: float = 0.99
@@ -51,6 +52,7 @@ class Config:
     scale_reg: bool = True             # Motivo: scale lambda terms by mean |F^T z| (detached)
     disc_reward_clip: float = 10.0     # clamp on log(D / (1 - D))
     grad_clip: float = 0.0             # 0 = off
+    q_loss_coef: float = -1.0          # auxiliary diagonal F loss (Touati 2023 eq. 9); < 0 means 1/d
 
     # ------------------------------------------------------------ penalties for Q_R (computed from g)
     pen_collision: float = 1.0
@@ -62,7 +64,7 @@ class Config:
     thrust_limit: float = 1.5          # collective / hover above this is penalised
 
     # ------------------------------------------------------------ domain randomisation (training)
-    domain_rand: bool = True           # master switch for all domain randomisation
+    domain_rand: bool = False          # master switch for all domain randomisation (off: no sim2real needed)
     rand_drone_dynamics: bool = True   # drone mass and drag randomisation
     enable_wind: bool = True           # ambient/mean wind in arena
     dynamic_wind: bool = True          # dynamic stochastic wind turbulence
@@ -97,10 +99,11 @@ class Config:
     expl_noise: float = 0.2
     warm_steps: int = 200              # env steps of expert + random actions before learning
     warm_expert_frac: float = 0.5      # fraction of worlds driven by the expert during warm start
+    expert_world_frac: float = 0.1     # fraction of training worlds flown by the expert after warm start
     learning_starts: int = 0           # min transitions before updates (0 = batch_size)
 
     # ------------------------------------------------------------ run
-    scene: str = "trash"               # trash | ocean | both
+    scene: str = "trash"               # trash | delivery | ocean | all ("both" = all)
     backend: str = "torch"
     num_envs: int = 1024
     device: str = "cuda"
@@ -112,7 +115,8 @@ class Config:
     save_every: int = 2000
     demo_every: int = 500              # iterations between expert demo collections
     demo_envs: int = 32                # worlds in the separate expert demo env
-    demo_steps: int = 64               # steps per demo collection
+    demo_steps: int = 64               # steps per demo collection (demo env keeps running between calls)
+    demo_initial_steps: int = 600      # first collection: a full episode, so demos include grasp and carry
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -132,6 +136,6 @@ def tiny_config(**kw) -> Config:
                 b_width=32, b_blocks=1, disc_width=32, disc_blocks=1,
                 buffer_capacity=4096, demo_capacity=256, batch_size=32,
                 num_envs=4, device="cpu", lidar=False, warm_steps=4,
-                log_every=2, save_every=4, demo_every=4, demo_envs=2, demo_steps=16)
+                log_every=2, save_every=4, demo_every=4, demo_envs=2, demo_steps=16, demo_initial_steps=16)
     base.update(kw)
     return Config(**base)

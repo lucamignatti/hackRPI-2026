@@ -28,10 +28,10 @@ class VelocityController:
         self.inertia = torch.tensor(INERTIA)
 
     @staticmethod
-    def command(action: torch.Tensor):
+    def command(action: torch.Tensor, max_speed: float = spec.MAX_SPEED, max_vz: float = spec.MAX_VZ):
         """action [..., 5] in [-1, 1] -> (v_des [..., 3], yaw_rate [...])."""
         a = action.clamp(-1.0, 1.0)
-        scale = a.new_tensor([spec.MAX_SPEED, spec.MAX_SPEED, spec.MAX_VZ])
+        scale = a.new_tensor([max_speed, max_speed, max_vz])
         return a[..., :3] * scale, a[..., 3] * spec.MAX_YAW_RATE
 
     def __call__(self, action, quat, vel, ang_vel_body, mass=None, v_des=None):

@@ -155,3 +155,51 @@ def test_green_penetrates_water_and_nir_does_not():
     # murky water hides the same fish
     img2, down2, _ = lm.scan(origin, quat, fish, waves=w, t=torch.zeros(1), turbidity=torch.tensor([5.0]), noise=False)
     assert down2[0, 0, 1][center] == 255
+
+
+# ---------------------------------------------------------------- terrain
+from skyhand.env.terrain import LakeWater, Terrain  # noqa: E402
+
+
+def _terrain():
+    T = Terrain(3)
+    T.generate(torch.tensor([0, 1]), "rolling", torch.Generator().manual_seed(0))
+    T.set_flat(torch.tensor([2]), 1.5)
+    return T
+
+
+def test_terrain_height_matches_grid_and_flat():
+    T = _terrain()
+    xy = torch.stack([T.gx[10, 20], T.gy[10, 20]]).view(1, 1, 2).expand(3, 1, 2)
+    h = T.height(xy).squeeze(-1)
+    assert torch.allclose(h[:2], T.h[:2, 10, 20], atol=1e-4) and abs(float(h[2]) - 1.5) < 1e-6
+
+
+def test_terrain_ray_hit_matches_brute_force():
+    T = _terrain()
+    torch.manual_seed(0)
+    o = (torch.rand(3, 256, 3) - 0.5) * torch.tensor([40.0, 40.0, 0.0])
+    o[..., 2] = T.height(o[..., :2]) + 0.5 + 4 * torch.rand(3, 256)
+    d = torch.nn.functional.normalize(torch.randn(3, 256, 3), dim=-1)
+    s = T.ray_hit(o, d, 30.0)
+    ts = torch.arange(1, 3001) * 0.01
+    pp = o[:, :, None] + d[:, :, None] * ts.view(1, 1, -1, 1)
+    below = pp[..., 2] < T.height(pp[..., :2].reshape(3, -1, 2)).reshape(pp.shape[:3])
+    ref = torch.where(below.any(-1), ts[below.float().argmax(-1)], torch.full(o.shape[:2], float("inf")))
+    agree = (torch.isfinite(ref) == torch.isfinite(s)).float().mean()
+    both = torch.isfinite(ref) & torch.isfinite(s)
+    assert agree > 0.97 and (s[both] - ref[both]).abs().median() < 0.02
+
+
+def test_lake_water_only_over_low_ground():
+    T = _terrain()
+    lvl = T.water_level(torch.zeros(3))
+    assert float(lvl[2]) < -1000                                    # flat world: no water
+    lw = LakeWater(T, torch.tensor([0]))
+    wet = torch.nonzero(T.h[0] < lvl[0] - 0.5)[0]
+    dry = torch.nonzero(T.h[0] > lvl[0] + 0.5)[0]
+    for (r, c), expect in ((wet, True), (dry, False)):
+        o = torch.tensor([[[float(T.gx[r, c]), float(T.gy[r, c]), 5.0]]])
+        d = torch.tensor([[[0.0, 0.0, -1.0]]])
+        hit = lw.ray_hit(o, d, torch.zeros(1))
+        assert bool(torch.isfinite(hit).all()) == expect
