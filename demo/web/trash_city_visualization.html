@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - City Street Grid Trash & Garbage Truck Pickup</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-amber-400 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand City — Street Grid, Curbside Litter & Garbage Truck Drop-Off</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Simulating <code class="text-amber-400 font-mono">skyhand/env/scenes.py</code>: urban city buildings, street lanes with moving cars, curbside trash items (pizza box, bag), and garbage truck drop-off.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnItem" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-600 hover:bg-amber-500 text-white transition-all shadow-sm">
+          📦 Switch Item: Pizza Box
+        </button>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Randomize City
+        </button>
+        <button id="btnPhase" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-all">
+          ⏭️ Next Phase
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#080d17] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Mission Stage Banner -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1.5 text-xs bg-black/80 backdrop-blur p-3 rounded-lg border border-amber-900/40">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-white">CITY SWEEP:</span>
+          <span id="phasePill" class="px-2 py-0.5 rounded text-[12px] font-semibold font-mono bg-amber-950 text-amber-300 border border-amber-600/40">
+            Phase 1: Align with Curbside Trash
+          </span>
+        </div>
+        <div id="phaseDesc" class="text-xs text-amber-100/90 max-w-xs">
+          Drone navigates street canyon between city high-rises to latch onto curbside pizza box.
+        </div>
+      </div>
+
+      <!-- Live Flight HUD -->
+      <div class="absolute top-3 right-3 flex flex-col gap-1.5 bg-black/80 backdrop-blur p-3 rounded-lg text-xs border border-amber-900/40 min-w-[210px]">
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Target Item:</span>
+          <span id="gaugeItem" class="font-mono font-bold text-amber-400">Pizza Box (Held)</span>
+        </div>
+        <div class="flex justify-between items-center mt-1">
+          <span class="text-[var(--muted-foreground)]">Drop-Off Receptor:</span>
+          <span class="font-mono text-emerald-400 font-semibold">Garbage Truck Hopper</span>
+        </div>
+        <div class="flex justify-between items-center mt-1">
+          <span class="text-[var(--muted-foreground)]">Street Traffic:</span>
+          <span class="font-mono text-cyan-300">2 Cars Active (Lanes A & B)</span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Building Clearance:</span>
+          <span id="gaugeClearance" class="font-mono text-cyan-200">Safe (4.2m)</span>
+        </div>
+      </div>
+
+      <!-- Controls Hint -->
+      <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-amber-300 border border-amber-700/40">
+        <span>🎥 Rotate: <span class="text-white">Click & Drag</span> | Zoom: <span class="text-white">Mouse Wheel</span></span>
+      </div>
+
+      <!-- Legend -->
+      <div class="absolute bottom-3 right-3 flex items-center gap-2.5 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs border border-zinc-700">
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-amber-500"></span> Trash Item</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-emerald-500"></span> Garbage Truck</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-rose-500"></span> Moving Cars</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-slate-600"></span> Buildings</span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone Urban Position</div>
+        <div id="statDronePos" class="font-mono text-cyan-300 font-semibold text-sm">Alt: 3.5m (Canyon)</div>
+        <div class="text-xs text-[var(--muted-foreground)]">LiDAR building scans active</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Garbage Truck Hopper</div>
+        <div id="statTruckPos" class="font-mono text-emerald-400 font-semibold text-sm">Parked at (8.0, -6.0)</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Aperture radius: 1.2m</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Curbside Item State</div>
+        <div id="statItemState" class="font-mono text-amber-400 font-semibold text-sm">Grip: SECURE</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Rope handle loop engaged</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Dynamic Street Obstacles</div>
+        <div class="font-mono text-rose-400 font-semibold text-sm">2 Moving Vehicles</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Speed: 3.5 m/s in lane</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const ARENA_HALF = 25.0; // 50x50m urban arena
+    const DT = 0.035;
+
+    class CityTrashSim {
+      constructor() {
+        this.time = 0.0;
+        this.phase = 0; // 0: approach item, 1: grasp, 2: lift, 3: transit to truck, 4: drop in hopper, 5: success
+        this.itemType = "pizza_box";
+        this.reset();
+      }
+
+      reset() {
+        this.time = 0.0;
+        this.phase = 0;
+
+        // City Buildings (Blocks)
+        this.buildings = [
+          { x: -14, y: -14, w: 10, l: 10, h: 14 },
+          { x: 14, y: -14, w: 10, l: 10, h: 16 },
+          { x: -14, y: 14, w: 10, l: 10, h: 12 },
+          { x: 14, y: 14, w: 10, l: 10, h: 18 }
+        ];
+
+        // Garbage Truck (Drop-off zone in street)
+        this.truck = { x: 8.0, y: -4.0, z: 1.4, l: 4.8, w: 2.2, h: 2.0 };
+
+        // Curbside Trash Item
+        this.item = {
+          x: -6.0 + (Math.random() - 0.5) * 4.0,
+          y: 6.0 + (Math.random() - 0.5) * 4.0,
+          z: 0.15,
+          type: this.itemType,
+          inTruck: false
+        };
+
+        // Drone
+        this.drone = {
+          x: -2.0, y: -2.0, z: 4.0,
+          vx: 0, vy: 0, vz: 0,
+          holding: false
+        };
+
+        // Street Cars moving along lanes
+        this.cars = [
+          { x: -20, y: 0, vx: 3.5, vy: 0, color: "#ef4444" },
+          { x: 0, y: -20, vx: 0, vy: 3.2, color: "#3b82f6" }
+        ];
+      }
+
+      switchItem() {
+        this.itemType = this.itemType === "pizza_box" ? "trash_bag" : (this.itemType === "trash_bag" ? "bottle" : "pizza_box");
+        document.getElementById("btnItem").innerText = `📦 Switch Item: ${this.itemType.replace("_", " ").toUpperCase()}`;
+        document.getElementById("gaugeItem").innerText = `${this.itemType.replace("_", " ").toUpperCase()} (Active)`;
+        this.reset();
+      }
+
+      nextPhase() {
+        this.phase = (this.phase + 1) % 6;
+      }
+
+      step() {
+        this.time += DT;
+
+        // 1. Move Cars along street lanes
+        for (const c of this.cars) {
+          c.x += c.vx * DT;
+          c.y += c.vy * DT;
+          if (c.x > ARENA_HALF) c.x = -ARENA_HALF;
+          if (c.y > ARENA_HALF) c.y = -ARENA_HALF;
+        }
+
+        // 2. Drone Mission State Machine
+        let targetX = this.drone.x;
+        let targetY = this.drone.y;
+        let targetZ = 4.0;
+
+        if (this.phase === 0) {
+          // Approach item
+          targetX = this.item.x; targetY = this.item.y; targetZ = 1.8;
+          if (Math.hypot(this.drone.x - this.item.x, this.drone.y - this.item.y) < 0.3) this.phase = 1;
+        } else if (this.phase === 1) {
+          // Grasp item handle
+          targetX = this.item.x; targetY = this.item.y; targetZ = 0.35;
+          if (this.drone.z < 0.45) {
+            this.drone.holding = true;
+            this.phase = 2;
+          }
+        } else if (this.phase === 2) {
+          // Lift item above street traffic
+          targetX = this.item.x; targetY = this.item.y; targetZ = 4.5;
+          if (this.drone.z > 4.0) this.phase = 3;
+        } else if (this.phase === 3) {
+          // Fly to Garbage Truck hopper
+          targetX = this.truck.x; targetY = this.truck.y; targetZ = 4.5;
+          if (Math.hypot(this.drone.x - this.truck.x, this.drone.y - this.truck.y) < 0.4) this.phase = 4;
+        } else if (this.phase === 4) {
+          // Lower into hopper and release
+          targetX = this.truck.x; targetY = this.truck.y; targetZ = 2.4;
+          if (this.drone.z < 2.6) {
+            this.drone.holding = false;
+            this.item.inTruck = true;
+            this.phase = 5; // Delivered!
+          }
+        } else if (this.phase === 5) {
+          // Ascend away
+          targetZ = 5.0;
+        }
+
+        // Avoid buildings
+        for (const b of this.buildings) {
+          if (Math.abs(this.drone.x - b.x) < b.w / 2 + 1.2 && Math.abs(this.drone.y - b.y) < b.l / 2 + 1.2 && this.drone.z < b.h) {
+            targetZ = Math.max(targetZ, b.h + 2.0);
+          }
+        }
+
+        this.drone.vx += (targetX - this.drone.x) * 1.8 * DT;
+        this.drone.vy += (targetY - this.drone.y) * 1.8 * DT;
+        this.drone.vz += (targetZ - this.drone.z) * 2.2 * DT;
+
+        this.drone.x += this.drone.vx * DT;
+        this.drone.y += this.drone.vy * DT;
+        this.drone.z += this.drone.vz * DT;
+
+        if (this.drone.holding) {
+          this.item.x = this.drone.x;
+          this.item.y = this.drone.y;
+          this.item.z = this.drone.z - 0.25;
+        } else if (this.item.inTruck) {
+          this.item.x = this.truck.x;
+          this.item.y = this.truck.y;
+          this.item.z = this.truck.z;
+        }
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 3D Rendering
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+    const sim = new CityTrashSim();
+
+    let camYaw = -0.75;
+    let camPitch = 0.45;
+    let camDist = 55.0;
+    const targetLook = { x: 0, y: 0, z: 2.0 };
+
+    function project3D(x, y, z) {
+      const rx = x - targetLook.x;
+      const ry = y - targetLook.y;
+      const rz = z - targetLook.z;
+
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null;
+
+      const fov = 750;
+      return {
+        x: canvas.width / 2 + (x2 / camZ) * fov,
+        y: canvas.height / 2 - (z2 / camZ) * fov,
+        depth: camZ
+      };
+    }
+
+    // Camera Drag
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      isDragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      camYaw += (e.clientX - lastX) * 0.008;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + (e.clientY - lastY) * 0.008));
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { isDragging = false; });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      camDist = Math.max(20.0, Math.min(110.0, camDist + e.deltaY * 0.05));
+    }, { passive: false });
+
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnItem").addEventListener("click", () => { sim.switchItem(); });
+    document.getElementById("btnPhase").addEventListener("click", () => { sim.nextPhase(); });
+
+    const phaseNames = [
+      { name: "Phase 1: Approach Curbside Litter", desc: "Drone navigates street canyon to find designated trash item." },
+      { name: "Phase 2: Engage Gripper", desc: "Precision descent to lock magnetic gripper onto handle." },
+      { name: "Phase 3: Urban Clearance Climb", desc: "Ascending to 4.5m to stay safely above street cars." },
+      { name: "Phase 4: Transit to Garbage Truck", desc: "Flight path along central avenue toward the parked garbage truck." },
+      { name: "Phase 5: Dump into Hopper", desc: "Centering over the open garbage truck compactor and releasing payload." },
+      { name: "Phase 6: Cleanup Complete", desc: "Trash safely inside garbage truck hopper. City street clean!" }
+    ];
+
+    function render3D() {
+      sim.step();
+
+      const pInfo = phaseNames[sim.phase] || phaseNames[0];
+      document.getElementById("phasePill").innerText = pInfo.name;
+      document.getElementById("phaseDesc").innerText = pInfo.desc;
+
+      document.getElementById("statDronePos").innerText = `Alt: ${sim.drone.z.toFixed(1)}m (Z)`;
+      document.getElementById("statItemState").innerText = sim.drone.holding ? "Grip: SECURE" : (sim.item.inTruck ? "In Truck Hopper" : "Curbside Resting");
+
+      ctx.fillStyle = "#080d17";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Asphalt Street Grid Floor
+      ctx.strokeStyle = "rgba(51, 65, 85, 0.4)";
+      ctx.lineWidth = 1;
+      const step = 5;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += step) {
+        const p1 = project3D(x, -ARENA_HALF, 0);
+        const p2 = project3D(x, ARENA_HALF, 0);
+        if (p1 && p2) { ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); }
+      }
+      for (let y = -ARENA_HALF; y <= ARENA_HALF; y += step) {
+        const p1 = project3D(-ARENA_HALF, y, 0);
+        const p2 = project3D(ARENA_HALF, y, 0);
+        if (p1 && p2) { ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke(); }
+      }
+
+      // City Buildings (High-Rises)
+      for (const b of sim.buildings) {
+        const pBase = project3D(b.x, b.y, 0);
+        const pTop = project3D(b.x, b.y, b.h);
+        if (pBase && pTop) {
+          const w = (b.w / pBase.depth) * 750;
+          const h = pBase.y - pTop.y;
+          ctx.fillStyle = "#1e293b";
+          ctx.strokeStyle = "#475569";
+          ctx.lineWidth = 2;
+          ctx.fillRect(pBase.x - w / 2, pTop.y, w, h);
+          ctx.strokeRect(pBase.x - w / 2, pTop.y, w, h);
+
+          // Windows
+          ctx.fillStyle = "rgba(254, 240, 138, 0.25)";
+          for (let wx = -w/2 + 8; wx < w/2 - 8; wx += 14) {
+            for (let wy = pTop.y + 10; wy < pBase.y - 10; wy += 14) {
+              ctx.fillRect(pBase.x + wx, wy, 8, 8);
+            }
+          }
+        }
+      }
+
+      // Garbage Truck
+      const tP = project3D(sim.truck.x, sim.truck.y, 0);
+      const tTop = project3D(sim.truck.x, sim.truck.y, sim.truck.h);
+      if (tP && tTop) {
+        const w = (sim.truck.w / tP.depth) * 750;
+        const h = tP.y - tTop.y;
+
+        // Truck Cab & Compactor
+        ctx.fillStyle = "#047857";
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 2;
+        ctx.fillRect(tP.x - w / 2, tTop.y, w * 1.6, h);
+        ctx.strokeRect(tP.x - w / 2, tTop.y, w * 1.6, h);
+
+        // Hopper opening
+        ctx.fillStyle = "#0f172a";
+        ctx.fillRect(tP.x - w * 0.4, tTop.y + 4, w * 0.8, h * 0.45);
+
+        ctx.fillStyle = "#6ee7b7";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("🚛 GARBAGE TRUCK", tP.x - 45, tTop.y - 8);
+      }
+
+      // Moving Street Cars
+      for (const c of sim.cars) {
+        const cp = project3D(c.x, c.y, 0.4);
+        if (cp) {
+          ctx.fillStyle = c.color;
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.ellipse(cp.x, cp.y, 14, 8, Math.atan2(c.vy, c.vx), 0, Math.PI * 2);
+          ctx.fill(); ctx.stroke();
+        }
+      }
+
+      // Curbside Trash Item
+      const ip = project3D(sim.item.x, sim.item.y, sim.item.z);
+      if (ip) {
+        ctx.fillStyle = "#f59e0b";
+        ctx.strokeStyle = "#fbbf24";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ip.x, ip.y, 6, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        ctx.fillStyle = "#fef08a";
+        ctx.font = "bold 10px monospace";
+        ctx.fillText(sim.item.type.replace("_", " ").toUpperCase(), ip.x - 28, ip.y - 10);
+      }
+
+      // Drone
+      const dp = project3D(sim.drone.x, sim.drone.y, sim.drone.z);
+      if (dp) {
+        const sz = (0.5 / dp.depth) * 750;
+        ctx.fillStyle = "#0284c7";
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(dp.x, dp.y, sz * 0.6, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        // 4 Rotors
+        ctx.fillStyle = "rgba(56, 189, 248, 0.6)";
+        ctx.beginPath();
+        ctx.ellipse(dp.x - sz, dp.y - sz * 0.5, 6, 3, sim.time * 25, 0, Math.PI * 2);
+        ctx.ellipse(dp.x + sz, dp.y + sz * 0.5, 6, 3, sim.time * 25, 0, Math.PI * 2);
+        ctx.ellipse(dp.x - sz, dp.y + sz * 0.5, 6, 3, sim.time * 25, 0, Math.PI * 2);
+        ctx.ellipse(dp.x + sz, dp.y - sz * 0.5, 6, 3, sim.time * 25, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#38bdf8";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("CITY DRONE", dp.x - 30, dp.y - sz - 8);
+      }
+
+      requestAnimationFrame(render3D);
+    }
+
+    render3D();
+  </script>
+</body>
+</html>

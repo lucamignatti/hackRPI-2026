@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - 400m Unified Mega Pretraining World</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-purple-400 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand World — 400m Unified Pretraining Environment (3 Drones)</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Simulating <code class="text-purple-400 font-mono">skyhand/env/scenes.py</code>: unified mega-map bridging city trash, remote clinics, coastline, net fishing boat, fish, and marine wildlife.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnFollow" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 hover:bg-purple-500 text-white transition-all shadow-sm">
+          🚁 Follow: Drone 0 (City)
+        </button>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Randomize 400m World
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#070b14] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Multi-Task Status Banner -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1 text-xs bg-black/80 backdrop-blur p-3 rounded-lg border border-purple-900/40">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-white">400M MULTI-TASK DOMAIN:</span>
+          <span class="px-2 py-0.5 rounded text-[11px] font-semibold font-mono bg-purple-950 text-purple-300 border border-purple-600/40">
+            3 Active Autonomous Agents
+          </span>
+        </div>
+        <div class="text-xs text-purple-100/90 max-w-sm mt-0.5">
+          • <span class="text-amber-300">Drone 0:</span> Urban Trash Collection<br>
+          • <span class="text-rose-300">Drone 1:</span> Rural Clinic Organ Delivery<br>
+          • <span class="text-cyan-300">Drone 2:</span> Coastal Pelagic Net Fishing
+        </div>
+      </div>
+
+      <!-- Controls Hint -->
+      <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-purple-300 border border-purple-700/40">
+        <span>🎥 Rotate: <span class="text-white">Click & Drag</span> | Zoom: <span class="text-white">Mouse Wheel</span></span>
+      </div>
+
+      <!-- Map Sectors Legend -->
+      <div class="absolute bottom-3 right-3 flex items-center gap-2.5 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs border border-zinc-700">
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-amber-500"></span> Sector 1: Town</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-rose-500"></span> Sector 2: Clinics</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-cyan-500"></span> Sector 3: Ocean</span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone 0 (Urban)</div>
+        <div id="statD0" class="font-mono text-amber-300 font-semibold text-sm">Alt: 4.2m · Town</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Task: Garbage truck drop</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone 1 (Medical)</div>
+        <div id="statD1" class="font-mono text-rose-300 font-semibold text-sm">Alt: 32.0m · Mesas</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Task: Remote clinic flight</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Drone 2 (Maritime)</div>
+        <div id="statD2" class="font-mono text-cyan-300 font-semibold text-sm">Alt: 1.8m · Offshore</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Task: Net trawling over fish</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Ecosystem Inhabitants</div>
+        <div class="font-mono text-purple-300 font-semibold text-sm">Marine & Air Wildlife</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Whales, dolphins, vultures</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const ARENA_HALF = 100.0; // Scaled 400m unified coordinates
+    const DT = 0.035;
+
+    class WorldMegaSim {
+      constructor() {
+        this.time = 0.0;
+        this.followId = 0;
+        this.reset();
+      }
+
+      reset() {
+        this.time = 0.0;
+
+        // Sector 1: City & Town (West)
+        this.town = { x: -60, y: -40, radius: 25 };
+        this.buildings = [
+          { x: -70, y: -45, w: 12, l: 12, h: 16 },
+          { x: -50, y: -45, w: 12, l: 12, h: 12 },
+          { x: -60, y: -30, w: 10, l: 14, h: 14 }
+        ];
+        this.truck = { x: -58, y: -40, z: 1.2 };
+
+        // Sector 2: Rural Clinics & Mesas (North & Center)
+        this.clinic1 = { x: -10, y: 40, z: 10, name: "Clinic 1" };
+        this.clinic2 = { x: 40, y: 50, z: 6, name: "Clinic 2" };
+
+        // Sector 3: Coastline & Open Ocean (East & South)
+        this.boat = { x: 50, y: -45, z: 0.0 };
+
+        // 3 Distinct Drones
+        this.drones = [
+          { id: 0, x: -60, y: -40, z: 4.5, vx: 0, vy: 0, vz: 0, color: "#fbbf24", label: "Drone 0 (Town)" },
+          { id: 1, x: -10, y: 40, z: 12.0, vx: 0, vy: 0, vz: 0, color: "#f43f5e", label: "Drone 1 (Clinic)" },
+          { id: 2, x: 45, y: -40, z: 1.8, vx: 0, vy: 0, vz: 0, color: "#22d3ee", label: "Drone 2 (Sea)" }
+        ];
+
+        // Wildlife
+        this.whale = { x: 75, y: -60, z: -2.0, vx: 0.4, vy: 0.2 };
+        this.vulture = { orbitX: 15, orbitY: 45, radius: 18, angle: 0, speed: 0.4 };
+        this.fish = [
+          { x: 48, y: -35, z: -1.0 }, { x: 52, y: -37, z: -0.8 }, { x: 50, y: -34, z: -1.2 }
+        ];
+      }
+
+      getElevation(x, y) {
+        // Coastline boundary: x > 30 begins water
+        if (x > 25 && y < 10) {
+          return 0.0; // Ocean
+        }
+        // Mesa near Clinic 1
+        const dMesa = Math.hypot(x - (-10), y - 40);
+        if (dMesa < 25) return 10.0 * Math.exp(-(dMesa*dMesa)/250.0);
+        // Rolling plains
+        return 3.0 + 2.0 * Math.sin(0.05 * x) * Math.cos(0.05 * y);
+      }
+
+      cycleFollow() {
+        this.followId = (this.followId + 1) % 3;
+        const labels = ["Drone 0 (City)", "Drone 1 (Medical)", "Drone 2 (Ocean)"];
+        document.getElementById("btnFollow").innerText = `🚁 Follow: ${labels[this.followId]}`;
+      }
+
+      step() {
+        this.time += DT;
+
+        // Vulture in thermals
+        this.vulture.angle += this.vulture.speed * DT;
+        this.vulture.x = this.vulture.orbitX + Math.cos(this.vulture.angle) * this.vulture.radius;
+        this.vulture.y = this.vulture.orbitY + Math.sin(this.vulture.angle) * this.vulture.radius;
+
+        // Whale wandering
+        this.whale.x += this.whale.vx * DT;
+        this.whale.y += this.whale.vy * DT;
+        if (this.whale.x > ARENA_HALF - 5) this.whale.vx *= -1;
+
+        // Drone 0: Patrols city street grid
+        const t0X = -60 + 12 * Math.cos(this.time * 0.4);
+        const t0Y = -40 + 10 * Math.sin(this.time * 0.4);
+        this.drones[0].x += (t0X - this.drones[0].x) * 1.5 * DT;
+        this.drones[0].y += (t0Y - this.drones[0].y) * 1.5 * DT;
+
+        // Drone 1: Shuttles between Clinic 1 and Clinic 2
+        const alpha = (Math.sin(this.time * 0.25) + 1) / 2;
+        const t1X = this.clinic1.x * (1 - alpha) + this.clinic2.x * alpha;
+        const t1Y = this.clinic1.y * (1 - alpha) + this.clinic2.y * alpha;
+        const t1Z = 28.0 + 4 * Math.sin(this.time * 0.5);
+        this.drones[1].x += (t1X - this.drones[1].x) * 2.0 * DT;
+        this.drones[1].y += (t1Y - this.drones[1].y) * 2.0 * DT;
+        this.drones[1].z += (t1Z - this.drones[1].z) * 1.5 * DT;
+
+        // Drone 2: Trawls coastal fish school
+        const t2X = 50 + 10 * Math.cos(this.time * 0.5);
+        const t2Y = -40 + 8 * Math.sin(this.time * 0.5);
+        this.drones[2].x += (t2X - this.drones[2].x) * 1.4 * DT;
+        this.drones[2].y += (t2Y - this.drones[2].y) * 1.4 * DT;
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 3D Rendering
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+    const sim = new WorldMegaSim();
+
+    let camYaw = -0.75;
+    let camPitch = 0.45;
+    let camDist = 140.0;
+    let targetLook = { x: 0, y: 0, z: 5 };
+
+    function project3D(x, y, z) {
+      const rx = x - targetLook.x;
+      const ry = y - targetLook.y;
+      const rz = z - targetLook.z;
+
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null;
+
+      const fov = 750;
+      return {
+        x: canvas.width / 2 + (x2 / camZ) * fov,
+        y: canvas.height / 2 - (z2 / camZ) * fov,
+        depth: camZ
+      };
+    }
+
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", (e) => { isDragging = true; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId); });
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      camYaw += (e.clientX - lastX) * 0.006;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + (e.clientY - lastY) * 0.006));
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { isDragging = false; });
+    canvas.addEventListener("wheel", (e) => { e.preventDefault(); camDist = Math.max(40.0, Math.min(260.0, camDist + e.deltaY * 0.08)); }, { passive: false });
+
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnFollow").addEventListener("click", () => { sim.cycleFollow(); });
+
+    function render3D() {
+      sim.step();
+
+      // Smooth camera follow target
+      const fDrone = sim.drones[sim.followId];
+      targetLook.x += (fDrone.x - targetLook.x) * 0.05;
+      targetLook.y += (fDrone.y - targetLook.y) * 0.05;
+      targetLook.z += (fDrone.z - targetLook.z) * 0.05;
+
+      document.getElementById("statD0").innerText = `Alt: ${sim.drones[0].z.toFixed(1)}m · Town`;
+      document.getElementById("statD1").innerText = `Alt: ${sim.drones[1].z.toFixed(1)}m · Mesas`;
+      document.getElementById("statD2").innerText = `Alt: ${sim.drones[2].z.toFixed(1)}m · Offshore`;
+
+      ctx.fillStyle = "#070b14";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Terrain Mesh (400m grid)
+      ctx.strokeStyle = "rgba(71, 85, 105, 0.35)";
+      ctx.lineWidth = 1;
+      const step = 10;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += step) {
+        ctx.beginPath();
+        let started = false;
+        for (let y = -ARENA_HALF; y <= ARENA_HALF; y += 5) {
+          const z = sim.getElevation(x, y);
+          const p = project3D(x, y, z);
+          if (p) {
+            if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+            else { ctx.lineTo(p.x, p.y); }
+          }
+        }
+        ctx.stroke();
+      }
+
+      // City Buildings (Town)
+      for (const b of sim.buildings) {
+        const bp = project3D(b.x, b.y, 0);
+        const tp = project3D(b.x, b.y, b.h);
+        if (bp && tp) {
+          const w = (b.w / bp.depth) * 750;
+          ctx.fillStyle = "#334155";
+          ctx.strokeStyle = "#64748b";
+          ctx.fillRect(bp.x - w/2, tp.y, w, bp.y - tp.y);
+          ctx.strokeRect(bp.x - w/2, tp.y, w, bp.y - tp.y);
+        }
+      }
+
+      // Garbage Truck in Town
+      const trkP = project3D(sim.truck.x, sim.truck.y, 1.0);
+      if (trkP) {
+        ctx.fillStyle = "#10b981";
+        ctx.fillRect(trkP.x - 6, trkP.y - 4, 12, 8);
+        ctx.fillStyle = "#a7f3d0";
+        ctx.font = "10px monospace";
+        ctx.fillText("TRUCK", trkP.x - 14, trkP.y - 8);
+      }
+
+      // Clinic 1 & 2 Pads
+      const c1P = project3D(sim.clinic1.x, sim.clinic1.y, sim.clinic1.z);
+      if (c1P) {
+        ctx.fillStyle = "#3b82f6";
+        ctx.beginPath(); ctx.arc(c1P.x, c1P.y, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#93c5fd"; ctx.font = "10px monospace"; ctx.fillText("CLINIC 1", c1P.x - 22, c1P.y + 18);
+      }
+      const c2P = project3D(sim.clinic2.x, sim.clinic2.y, sim.clinic2.z);
+      if (c2P) {
+        ctx.fillStyle = "#10b981";
+        ctx.beginPath(); ctx.arc(c2P.x, c2P.y, 12, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#a7f3d0"; ctx.font = "10px monospace"; ctx.fillText("CLINIC 2", c2P.x - 22, c2P.y + 18);
+      }
+
+      // Coastline Boat
+      const btP = project3D(sim.boat.x, sim.boat.y, 0);
+      if (btP) {
+        ctx.fillStyle = "#f59e0b";
+        ctx.beginPath(); ctx.ellipse(btP.x, btP.y, 16, 8, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#fde68a"; ctx.font = "10px monospace"; ctx.fillText("BOAT", btP.x - 12, btP.y + 16);
+      }
+
+      // Whale in water
+      const whP = project3D(sim.whale.x, sim.whale.y, sim.whale.z);
+      if (whP) {
+        ctx.fillStyle = "#6366f1";
+        ctx.beginPath(); ctx.ellipse(whP.x, whP.y, 16, 7, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "#c7d2fe"; ctx.font = "10px monospace"; ctx.fillText("WHALE", whP.x - 16, whP.y - 10);
+      }
+
+      // Vulture in sky
+      const vuP = project3D(sim.vulture.x, sim.vulture.y, 35.0);
+      if (vuP) {
+        ctx.fillStyle = "#fbbf24";
+        ctx.font = "10px monospace";
+        ctx.fillText("🦅 VULTURE", vuP.x - 24, vuP.y);
+      }
+
+      // Drones
+      for (const d of sim.drones) {
+        const dp = project3D(d.x, d.y, d.z);
+        if (dp) {
+          ctx.fillStyle = d.color;
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(dp.x, dp.y, 7, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+          ctx.fillStyle = d.color;
+          ctx.font = "bold 11px monospace";
+          ctx.fillText(d.label, dp.x - 30, dp.y - 12);
+        }
+      }
+
+      requestAnimationFrame(render3D);
+    }
+
+    render3D();
+  </script>
+</body>
+</html>

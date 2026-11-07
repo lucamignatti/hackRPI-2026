@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SkyHand - Long-Range Rural Clinic Organ Delivery</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    canvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-transparent text-[var(--foreground)] antialiased p-3 select-none">
+  <div class="bg-[var(--card)] text-[var(--foreground)] border border-[var(--border)] rounded-xl p-5 shadow-sm max-w-5xl mx-auto flex flex-col gap-4">
+    
+    <!-- Header -->
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border)] pb-3">
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-3 rounded-full bg-rose-500 animate-pulse"></span>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Delivery — 600m Rural Clinic Organ Transport & Vulture Avoidance</h2>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
+          Simulating <code class="text-rose-400 font-mono">skyhand/env/scenes.py</code>: fast streamlined Zipline-style drone, remote African clinics, mesas, river valleys, and circling <strong>vultures</strong> in thermals.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="btnSpeed" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600 hover:bg-rose-500 text-white transition-all shadow-sm">
+          ⚡ Fast Streamlined Cruise (14 m/s)
+        </button>
+        <button id="btnReset" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-600 hover:bg-cyan-500 text-white transition-all shadow-sm">
+          🎲 Re-Generate 600m Map
+        </button>
+        <button id="btnPhase" class="px-3 py-1.5 rounded-lg text-xs font-semibold border border-[var(--border)] bg-[var(--background)] hover:bg-[var(--accent)] text-[var(--foreground)] transition-all">
+          ⏭️ Next Phase
+        </button>
+      </div>
+    </div>
+
+    <!-- 3D Canvas Viewport -->
+    <div class="relative rounded-xl overflow-hidden border border-[var(--border)] bg-[#0d0f17] shadow-inner">
+      <canvas id="canvas3d" width="960" height="540" class="w-full h-auto block cursor-grab active:cursor-grabbing"></canvas>
+      
+      <!-- Mission Stage Banner -->
+      <div class="absolute top-3 left-3 flex flex-col gap-1.5 text-xs bg-black/80 backdrop-blur p-3 rounded-lg border border-rose-900/40">
+        <div class="flex items-center gap-2">
+          <span class="font-bold text-white">INTER-CLINIC CORRIDOR:</span>
+          <span id="phasePill" class="px-2 py-0.5 rounded text-[12px] font-semibold font-mono bg-rose-950 text-rose-300 border border-rose-600/40">
+            Phase 2: High-Speed Mesa Transit
+          </span>
+        </div>
+        <div id="phaseDesc" class="text-xs text-rose-100/90 max-w-xs">
+          Navigating across river valley and ridge thermals between Clinic 1 and Clinic 2.
+        </div>
+      </div>
+
+      <!-- Live Flight HUD -->
+      <div class="absolute top-3 right-3 flex flex-col gap-1.5 bg-black/80 backdrop-blur p-3 rounded-lg text-xs border border-rose-900/40 min-w-[210px]">
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Airspeed:</span>
+          <span id="gaugeSpeed" class="font-mono font-bold text-cyan-300 text-sm">13.8 m/s (49.7 km/h)</span>
+        </div>
+        <div class="flex justify-between items-center mt-0.5">
+          <span class="text-[var(--muted-foreground)]">Thermal Vulture Hazard:</span>
+          <span id="gaugeVultures" class="font-mono font-bold text-amber-400">Clear (Dist &gt; 40m)</span>
+        </div>
+        <div class="flex justify-between items-center mt-1">
+          <span class="text-[var(--muted-foreground)]">Organ Container:</span>
+          <span class="font-mono text-emerald-400 font-semibold">SECURE (3.6°C)</span>
+        </div>
+        <div class="flex justify-between items-center">
+          <span class="text-[var(--muted-foreground)]">Terrain Clearance:</span>
+          <span id="gaugeClearance" class="font-mono text-cyan-200 font-semibold">28.4m above ridge</span>
+        </div>
+      </div>
+
+      <!-- Controls Hint -->
+      <div class="absolute bottom-3 left-3 flex items-center gap-2 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs text-rose-300 border border-rose-700/40">
+        <span>🎥 Rotate: <span class="text-white">Click & Drag</span> | Zoom: <span class="text-white">Mouse Wheel</span></span>
+      </div>
+
+      <!-- Legend -->
+      <div class="absolute bottom-3 right-3 flex items-center gap-2.5 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs border border-zinc-700">
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-blue-500"></span> Clinic 1 (Pickup)</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-emerald-500"></span> Clinic 2 (Drop)</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-amber-500"></span> Circling Vultures</span>
+        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-red-500/50"></span> Wildlife Reserve</span>
+      </div>
+    </div>
+
+    <!-- Telemetry Cards -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[var(--background)] p-3.5 rounded-lg border border-[var(--border)] text-xs">
+      <div>
+        <div class="text-[var(--muted-foreground)]">Streamlined Delivery Drone</div>
+        <div id="statDroneAlt" class="font-mono text-cyan-300 font-semibold text-sm">Alt: 42.5m ASL</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Low-drag fixed-pitch quad</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Origin Clinic 1 (Huts)</div>
+        <div class="font-mono text-blue-400 font-semibold text-sm">Pickup Pad Alpha</div>
+        <div class="text-xs text-[var(--muted-foreground)]">West mesa village</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Destination Clinic 2</div>
+        <div id="statDistClinic2" class="font-mono text-emerald-400 font-semibold text-sm">Dist: 180m remaining</div>
+        <div class="text-xs text-[var(--muted-foreground)]">East riverbank station</div>
+      </div>
+      <div>
+        <div class="text-[var(--muted-foreground)]">Circling Vulture Flocks</div>
+        <div class="font-mono text-amber-300 font-semibold text-sm">3 Birds in Thermal Core</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Altitude: 35-50m</div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    const ARENA_HALF = 80.0; // Scaled visual viewport representing the 600m rural region
+    const DT = 0.035;
+
+    class DeliveryClinicSim {
+      constructor() {
+        this.time = 0.0;
+        this.phase = 0; // 0: takeoff, 1: climb, 2: transit, 3: descent, 4: deliver, 5: complete
+        this.reset();
+      }
+
+      reset() {
+        this.time = 0.0;
+        this.phase = 0;
+
+        // Clinic 1 (West Mesa Pickup Pad)
+        this.clinic1 = { x: -55.0, y: -20.0, z: 12.0, radius: 4.0 };
+
+        // Clinic 2 (East Riverbank Drop Pad)
+        this.clinic2 = { x: 55.0, y: 25.0, z: 4.0, radius: 4.0 };
+
+        // Drone
+        this.drone = {
+          x: this.clinic1.x,
+          y: this.clinic1.y,
+          z: this.clinic1.z + 0.5,
+          vx: 0, vy: 0, vz: 0,
+          speed: 14.0,
+          holding: true
+        };
+
+        // Circling Vultures (spheres orbiting high in thermals)
+        this.vultures = [
+          { orbitX: 0.0, orbitY: 10.0, z: 42.0, radius: 18.0, angle: 0.0, speed: 0.35 },
+          { orbitX: 0.0, orbitY: 10.0, z: 46.0, radius: 24.0, angle: Math.PI * 0.7, speed: 0.30 },
+          { orbitX: -15.0, orbitY: -5.0, z: 38.0, radius: 14.0, angle: Math.PI * 1.4, speed: -0.40 }
+        ];
+
+        // Wildlife Reserve No-Fly Zone
+        this.nofly = { x: 5.0, y: -25.0, radius: 22.0, height: 60.0 };
+
+        // Terrain Features: Mesas, River, Hills
+        this.huts = [
+          { x: -50, y: -28, r: 2.2 }, { x: -60, y: -14, r: 2.5 }, { x: -48, y: -16, r: 2.0 },
+          { x: 52, y: 32, r: 2.4 }, { x: 62, y: 20, r: 2.5 }, { x: 46, y: 20, r: 2.2 }
+        ];
+      }
+
+      getTerrainHeight(x, y) {
+        // West Mesa
+        const dMesa1 = Math.hypot(x - (-55), y - (-20));
+        let h = 12.0 * Math.exp(- (dMesa1 * dMesa1) / 500.0);
+
+        // East Gentle Valley
+        const dMesa2 = Math.hypot(x - 55, y - 25);
+        h += 4.0 * Math.exp(- (dMesa2 * dMesa2) / 400.0);
+
+        // Center River Canyon Trench
+        const riverDist = Math.abs(x * 0.3 - y + 5);
+        if (riverDist < 12) {
+          h -= (12 - riverDist) * 0.4;
+        }
+
+        // Rolling Ridges
+        h += 6.0 * Math.sin(0.04 * x) * Math.cos(0.04 * y);
+        return Math.max(0, h);
+      }
+
+      nextPhase() {
+        this.phase = (this.phase + 1) % 6;
+      }
+
+      step() {
+        this.time += DT;
+
+        // 1. Update Vultures circling in thermals
+        for (const v of this.vultures) {
+          v.angle += v.speed * DT;
+          v.x = v.orbitX + Math.cos(v.angle) * v.radius;
+          v.y = v.orbitY + Math.sin(v.angle) * v.radius;
+        }
+
+        // 2. Drone Autopilot Waypoint Tracker
+        let targetX = this.drone.x;
+        let targetY = this.drone.y;
+        let targetZ = 38.0; // Cruise altitude
+
+        if (this.phase === 0) {
+          // Takeoff from Clinic 1
+          targetX = this.clinic1.x; targetY = this.clinic1.y; targetZ = this.clinic1.z + 8.0;
+          if (this.drone.z > this.clinic1.z + 6.0) this.phase = 1;
+        } else if (this.phase === 1) {
+          // Climb to cruise corridor
+          targetX = this.clinic1.x + 15.0; targetY = this.clinic1.y + 10.0; targetZ = 38.0;
+          if (this.drone.z > 32.0) this.phase = 2; // High-speed cruise
+        } else if (this.phase === 2) {
+          // Cross-country transit to Clinic 2
+          targetX = this.clinic2.x; targetY = this.clinic2.y; targetZ = 38.0;
+
+          // Vulture avoidance
+          for (const v of this.vultures) {
+            const dv = Math.hypot(this.drone.x - v.x, this.drone.y - v.y);
+            if (dv < 18.0) {
+              const push = (18.0 - dv) * 1.5;
+              targetY += ((this.drone.y - v.y) / (dv || 1)) * push;
+            }
+          }
+
+          // No-fly reserve avoidance
+          const dNf = Math.hypot(this.drone.x - this.nofly.x, this.drone.y - this.nofly.y);
+          if (dNf < this.nofly.radius + 10.0) {
+            const push = (this.nofly.radius + 10.0 - dNf) * 2.0;
+            targetX += ((this.drone.x - this.nofly.x) / (dNf || 1)) * push;
+            targetY += ((this.drone.y - this.nofly.y) / (dNf || 1)) * push;
+          }
+
+          const distToC2 = Math.hypot(this.drone.x - this.clinic2.x, this.drone.y - this.clinic2.y);
+          if (distToC2 < 15.0) this.phase = 3; // Begin descent
+        } else if (this.phase === 3) {
+          // Decelerate & descend over Clinic 2 Pad
+          targetX = this.clinic2.x; targetY = this.clinic2.y; targetZ = this.clinic2.z + 4.0;
+          if (this.drone.z < this.clinic2.z + 5.0) this.phase = 4;
+        } else if (this.phase === 4) {
+          // Soft touchdown on helipad
+          targetX = this.clinic2.x; targetY = this.clinic2.y; targetZ = this.clinic2.z + 0.4;
+          if (this.drone.z <= this.clinic2.z + 0.6) {
+            this.drone.holding = false;
+            this.phase = 5; // Delivered!
+          }
+        } else if (this.phase === 5) {
+          // Mission accomplished, holding position
+          targetZ = this.clinic2.z + 3.0;
+        }
+
+        // Drone flight dynamics
+        const maxSpd = this.phase === 2 ? 14.0 : 4.5;
+        let desVx = (targetX - this.drone.x) * 1.8;
+        let desVy = (targetY - this.drone.y) * 1.8;
+        let desVz = (targetZ - this.drone.z) * 1.6;
+
+        const hSpd = Math.hypot(desVx, desVy);
+        if (hSpd > maxSpd) {
+          desVx = (desVx / hSpd) * maxSpd;
+          desVy = (desVy / hSpd) * maxSpd;
+        }
+
+        this.drone.vx += (desVx - this.drone.vx) * 0.12;
+        this.drone.vy += (desVy - this.drone.vy) * 0.12;
+        this.drone.vz += (desVz - this.drone.vz) * 0.15;
+
+        this.drone.x += this.drone.vx * DT;
+        this.drone.y += this.drone.vy * DT;
+        this.drone.z += this.drone.vz * DT;
+      }
+    }
+
+    // -------------------------------------------------------------
+    // 3D Rendering & Rural Terrain Landscape
+    // -------------------------------------------------------------
+    const canvas = document.getElementById("canvas3d");
+    const ctx = canvas.getContext("2d");
+    const sim = new DeliveryClinicSim();
+
+    let camYaw = -0.65;
+    let camPitch = 0.38;
+    let camDist = 120.0;
+    const targetLook = { x: 0, y: 0, z: 15.0 };
+
+    function project3D(x, y, z) {
+      const rx = x - targetLook.x;
+      const ry = y - targetLook.y;
+      const rz = z - targetLook.z;
+
+      const cosY = Math.cos(camYaw), sinY = Math.sin(camYaw);
+      const x1 = rx * cosY - ry * sinY;
+      const y1 = rx * sinY + ry * cosY;
+      const z1 = rz;
+
+      const cosP = Math.cos(camPitch), sinP = Math.sin(camPitch);
+      const x2 = x1;
+      const y2 = y1 * cosP - z1 * sinP;
+      const z2 = y1 * sinP + z1 * cosP;
+
+      const camZ = y2 + camDist;
+      if (camZ <= 1.0) return null;
+
+      const fov = 750;
+      return {
+        x: canvas.width / 2 + (x2 / camZ) * fov,
+        y: canvas.height / 2 - (z2 / camZ) * fov,
+        depth: camZ
+      };
+    }
+
+    // Camera Interaction
+    let isDragging = false;
+    let lastX = 0, lastY = 0;
+    canvas.addEventListener("pointerdown", (e) => {
+      isDragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      canvas.setPointerCapture(e.pointerId);
+    });
+    window.addEventListener("pointermove", (e) => {
+      if (!isDragging) return;
+      camYaw += (e.clientX - lastX) * 0.006;
+      camPitch = Math.max(0.05, Math.min(1.45, camPitch + (e.clientY - lastY) * 0.006));
+      lastX = e.clientX; lastY = e.clientY;
+    });
+    window.addEventListener("pointerup", () => { isDragging = false; });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      camDist = Math.max(40.0, Math.min(240.0, camDist + e.deltaY * 0.08));
+    }, { passive: false });
+
+    document.getElementById("btnReset").addEventListener("click", () => { sim.reset(); });
+    document.getElementById("btnPhase").addEventListener("click", () => { sim.nextPhase(); });
+
+    const phaseNames = [
+      { name: "Phase 0: Liftoff Clinic 1", desc: "Ascending vertically from West Mesa Clinic 1 pickup pad." },
+      { name: "Phase 1: Corridor Climb", desc: "Climbing to 38m cruise altitude to clear valley ridges." },
+      { name: "Phase 2: High-Speed Transit", desc: "Fast streamlined transit (14 m/s) navigating around vulture thermals." },
+      { name: "Phase 3: Clinic 2 Approach", desc: "Decelerating along descent glide path toward East Clinic 2." },
+      { name: "Phase 4: Precision Touchdown", desc: "Gentle landing on the hospital emergency drop-off pad." },
+      { name: "Phase 5: Medical Mission Complete", desc: "Organ cooler delivered safely into doctors' hands!" }
+    ];
+
+    function render3D() {
+      sim.step();
+
+      const pInfo = phaseNames[sim.phase] || phaseNames[0];
+      document.getElementById("phasePill").innerText = pInfo.name;
+      document.getElementById("phaseDesc").innerText = pInfo.desc;
+
+      const spdKmh = (Math.hypot(sim.drone.vx, sim.drone.vy) * 3.6).toFixed(1);
+      const spdMs = Math.hypot(sim.drone.vx, sim.drone.vy).toFixed(1);
+      document.getElementById("gaugeSpeed").innerText = `${spdMs} m/s (${spdKmh} km/h)`;
+
+      const groundZ = sim.getTerrainHeight(sim.drone.x, sim.drone.y);
+      const clearM = (sim.drone.z - groundZ).toFixed(1);
+      document.getElementById("gaugeClearance").innerText = `${clearM}m above terrain`;
+
+      const distC2 = Math.hypot(sim.drone.x - sim.clinic2.x, sim.drone.y - sim.clinic2.y).toFixed(0);
+      document.getElementById("statDistClinic2").innerText = `Dist: ${distC2}m remaining`;
+      document.getElementById("statDroneAlt").innerText = `Alt: ${sim.drone.z.toFixed(1)}m ASL`;
+
+      // Clear Canvas
+      ctx.fillStyle = "#0c111a";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // Render 3D Heightfield Terrain Mesh
+      ctx.strokeStyle = "rgba(78, 93, 115, 0.35)";
+      ctx.lineWidth = 1;
+      const step = 8;
+      for (let x = -ARENA_HALF; x <= ARENA_HALF; x += step) {
+        ctx.beginPath();
+        let started = false;
+        for (let y = -ARENA_HALF; y <= ARENA_HALF; y += 4) {
+          const tz = sim.getTerrainHeight(x, y);
+          const p = project3D(x, y, tz);
+          if (p) {
+            if (!started) { ctx.moveTo(p.x, p.y); started = true; }
+            else { ctx.lineTo(p.x, p.y); }
+          }
+        }
+        ctx.stroke();
+      }
+
+      // Wildlife Reserve No-Fly Zone
+      const nfP = project3D(sim.nofly.x, sim.nofly.y, 0);
+      if (nfP) {
+        const rPx = (sim.nofly.radius / nfP.depth) * 750;
+        ctx.fillStyle = "rgba(239, 68, 68, 0.12)";
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.6)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(nfP.x, nfP.y, rPx, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        ctx.fillStyle = "#fca5a5";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("🚫 WILDLIFE RESERVE (NO-FLY)", nfP.x - 70, nfP.y + 4);
+      }
+
+      // Village Huts
+      for (const h of sim.huts) {
+        const hz = sim.getTerrainHeight(h.x, h.y);
+        const hp = project3D(h.x, h.y, hz);
+        if (hp) {
+          const rPx = (h.r / hp.depth) * 750;
+          ctx.fillStyle = "#78350f";
+          ctx.beginPath();
+          ctx.arc(hp.x, hp.y, rPx, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      // Clinic 1 (West Pickup Pad)
+      const c1P = project3D(sim.clinic1.x, sim.clinic1.y, sim.clinic1.z);
+      if (c1P) {
+        const sz = (sim.clinic1.radius / c1P.depth) * 750;
+        ctx.fillStyle = "#1e3a8a";
+        ctx.strokeStyle = "#3b82f6";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(c1P.x, c1P.y, sz, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        ctx.fillStyle = "#93c5fd";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("CLINIC 1 (PICKUP)", c1P.x - 48, c1P.y + sz + 14);
+      }
+
+      // Clinic 2 (East Drop Pad)
+      const c2P = project3D(sim.clinic2.x, sim.clinic2.y, sim.clinic2.z);
+      if (c2P) {
+        const sz = (sim.clinic2.radius / c2P.depth) * 750;
+        ctx.fillStyle = "#064e3b";
+        ctx.strokeStyle = "#10b981";
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(c2P.x, c2P.y, sz, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        ctx.fillStyle = "#a7f3d0";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("CLINIC 2 (DROP-OFF)", c2P.x - 52, c2P.y + sz + 14);
+      }
+
+      // Circling Vultures in Thermal
+      for (const v of sim.vultures) {
+        const vp = project3D(v.x, v.y, v.z);
+        if (vp) {
+          // Bird wings
+          ctx.strokeStyle = "#f59e0b";
+          ctx.lineWidth = 2.5;
+          ctx.beginPath();
+          ctx.moveTo(vp.x - 8, vp.y + 3); ctx.lineTo(vp.x, vp.y); ctx.lineTo(vp.x + 8, vp.y + 3);
+          ctx.stroke();
+
+          ctx.fillStyle = "#fde68a";
+          ctx.font = "10px monospace";
+          ctx.fillText("🦅 VULTURE", vp.x - 24, vp.y - 8);
+        }
+      }
+
+      // Fast Delivery Drone (Streamlined fixed-wing/quad hybrid)
+      const dp = project3D(sim.drone.x, sim.drone.y, sim.drone.z);
+      if (dp) {
+        // Shadow on ground
+        const gz = sim.getTerrainHeight(sim.drone.x, sim.drone.y);
+        const sp = project3D(sim.drone.x, sim.drone.y, gz);
+        if (sp) {
+          ctx.fillStyle = "rgba(0,0,0,0.5)";
+          ctx.beginPath();
+          ctx.ellipse(sp.x, sp.y, 8, 4, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const sz = (1.2 / dp.depth) * 750;
+
+        // Drone Fuselage
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#e11d48";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.ellipse(dp.x, dp.y, sz * 1.4, sz * 0.45, Math.atan2(sim.drone.vy, sim.drone.vx), 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+
+        // Wings
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(dp.x - sz * 0.8, dp.y - sz * 1.2);
+        ctx.lineTo(dp.x + sz * 0.8, dp.y + sz * 1.2);
+        ctx.stroke();
+
+        // Organ Cooler Pod
+        if (sim.drone.holding) {
+          ctx.fillStyle = "#ef4444";
+          ctx.fillRect(dp.x - 4, dp.y + 2, 8, 8);
+        }
+
+        ctx.fillStyle = "#f43f5e";
+        ctx.font = "bold 11px monospace";
+        ctx.fillText("ZIPLINE DRONE", dp.x - 38, dp.y - sz - 10);
+      }
+
+      requestAnimationFrame(render3D);
+    }
+
+    render3D();
+  </script>
+</body>
+</html>
