@@ -107,9 +107,11 @@ function followDrone(i) {
 }
 frameCamera();
 
-scene.add(new THREE.HemisphereLight(0xcfe3ff, 0x223322, 0.9));
-const sun = new THREE.DirectionalLight(0xffffff, 1.1);
-sun.position.set(-20, -12, 45);
+// One cool fill and one warm key keep the scene readable without shadow passes or
+// extra lights. The lower fill preserves contrast on the building facades.
+scene.add(new THREE.HemisphereLight(0xb9d9ff, 0x182419, 0.58));
+const sun = new THREE.DirectionalLight(0xfff1d4, 1.85);
+sun.position.set(-28, -18, 38);
 scene.add(sun);
 
 function resize() {
@@ -697,19 +699,150 @@ function updateItem(g, it) {
 
 // ------------------------------------------------------------------ boxes by kind
 const CAR_COLORS = [0xd94141, 0x2d6cdf, 0xf2c94c, 0xeeeeee, 0x27ae60, 0x8e44ad, 0x222831];
-let windowTex = null;
-function windowTexture() {
-  if (windowTex) return windowTex;
-  const c = document.createElement("canvas");
-  c.width = 64; c.height = 64;
-  const x = c.getContext("2d");
-  x.fillStyle = "#8a9099"; x.fillRect(0, 0, 64, 64);
-  x.fillStyle = "#3e4a5c";
-  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) x.fillRect(6 + 32 * i, 8 + 32 * j, 20, 16);
-  windowTex = new THREE.CanvasTexture(c);
-  windowTex.wrapS = windowTex.wrapT = THREE.RepeatWrapping;
-  return windowTex;
+
+// Bake stable, z-up facade coordinates into each source part before merging it. Window
+// placement then depends only on geometry data -- never the camera or an interpolated
+// choice of projection axis. Non-facade parts still receive the attributes so all parts
+// can be merged into one draw call.
+function buildingPart(geometry, hasFacade = false) {
+  geometry.computeBoundingBox();
+  const bounds = geometry.boundingBox;
+  const position = geometry.attributes.position;
+  const normal = geometry.attributes.normal;
+  const uv = new Float32Array(position.count * 2);
+  const facade = new Float32Array(position.count);
+  const spanX = Math.max(bounds.max.x - bounds.min.x, 1e-6);
+  const spanY = Math.max(bounds.max.y - bounds.min.y, 1e-6);
+  const spanZ = Math.max(bounds.max.z - bounds.min.z, 1e-6);
+  for (let i = 0; i < position.count; i++) {
+    const xFacing = Math.abs(normal.getX(i)) > Math.abs(normal.getY(i));
+    uv[i * 2] = xFacing
+      ? (position.getY(i) - bounds.min.y) / spanY
+      : (position.getX(i) - bounds.min.x) / spanX;
+    uv[i * 2 + 1] = (position.getZ(i) - bounds.min.z) / spanZ;
+    facade[i] = hasFacade && Math.abs(normal.getZ(i)) < 0.25 ? 1 : 0;
+  }
+  geometry.setAttribute("buildingUv", new THREE.BufferAttribute(uv, 2));
+  geometry.setAttribute("buildingFacade", new THREE.BufferAttribute(facade, 1));
+  return geometry;
 }
+
+// Two shared city silhouettes. Each building is one mesh / draw call and owns no texture.
+const apartmentBuildingGeometry = mergeGeometries([
+  buildingPart(placedGeometry(new THREE.BoxGeometry(0.98, 0.98, 0.86), [0, 0, -0.07]), true),
+  buildingPart(placedGeometry(new THREE.BoxGeometry(0.78, 0.78, 0.14), [0, 0, 0.43])),
+  buildingPart(placedGeometry(new THREE.CylinderGeometry(0.12, 0.15, 0.12, 10), [0.20, -0.18, 0.54], [Math.PI / 2, 0, 0])),
+], false);
+apartmentBuildingGeometry.computeBoundingSphere();
+
+const officeBuildingGeometry = mergeGeometries([
+  buildingPart(placedGeometry(new THREE.BoxGeometry(0.96, 0.96, 0.10), [0, 0, -0.45])),
+  buildingPart(placedGeometry(new THREE.BoxGeometry(0.82, 0.82, 0.84), [0, 0, 0.02]), true),
+  buildingPart(placedGeometry(new THREE.BoxGeometry(0.90, 0.90, 0.06), [0, 0, 0.47])),
+  buildingPart(placedGeometry(new THREE.CylinderGeometry(0.012, 0.012, 0.18, 6), [0, 0, 0.58], [Math.PI / 2, 0, 0])),
+], false);
+officeBuildingGeometry.computeBoundingSphere();
+
+function makeBuildingMaterial(color, style) {
+  const office = style === 1;
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: office ? 0.20 : 0.68,
+    metalness: office ? 0.38 : 0.02,
+    flatShading: true,
+  });
+  const uniforms = {
+    buildingStyle: { value: style },
+    buildingFloors: { value: office ? 5 : 4 },
+    buildingBays: { value: office ? 4 : 3 },
+  };
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = /* glsl */ `
+      attribute vec2 buildingUv;
+      attribute float buildingFacade;
+      varying vec2 vBuildingUv;
+      varying float vBuildingFacade;
+      varying vec3 vBuildingNormal;
+    ` + shader.vertexShader;
+    shader.vertexShader = shader.vertexShader.replace(
+      "#include <begin_vertex>",
+      /* glsl */ `
+        #include <begin_vertex>
+        vBuildingUv = buildingUv;
+        vBuildingFacade = buildingFacade;
+        vBuildingNormal = normal;
+      `,
+    );
+    shader.fragmentShader = /* glsl */ `
+      uniform float buildingStyle;
+      uniform float buildingFloors;
+      uniform float buildingBays;
+      varying vec2 vBuildingUv;
+      varying float vBuildingFacade;
+      varying vec3 vBuildingNormal;
+    ` + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      /* glsl */ `
+        #include <color_fragment>
+        vec3 facadeNormal = normalize(vBuildingNormal);
+        float facadeMask = step(0.5, vBuildingFacade);
+        vec2 gridPosition = vBuildingUv * vec2(buildingBays, buildingFloors);
+        vec2 cell = floor(gridPosition);
+        vec2 tile = fract(gridPosition);
+        vec2 aa = max(fwidth(gridPosition), vec2(0.015));
+        float outerX = smoothstep(0.10 - aa.x, 0.10 + aa.x, tile.x)
+          * (1.0 - smoothstep(0.90 - aa.x, 0.90 + aa.x, tile.x));
+        float outerY = smoothstep(0.14 - aa.y, 0.14 + aa.y, tile.y)
+          * (1.0 - smoothstep(0.84 - aa.y, 0.84 + aa.y, tile.y));
+        float innerX = smoothstep(0.17 - aa.x, 0.17 + aa.x, tile.x)
+          * (1.0 - smoothstep(0.83 - aa.x, 0.83 + aa.x, tile.x));
+        float innerY = smoothstep(0.22 - aa.y, 0.22 + aa.y, tile.y)
+          * (1.0 - smoothstep(0.77 - aa.y, 0.77 + aa.y, tile.y));
+        float outerWindow = outerX * outerY * facadeMask;
+        float windowMask = innerX * innerY * facadeMask;
+        float frameMask = max(outerWindow - windowMask, 0.0);
+        float sillMask = outerX * smoothstep(0.08 - aa.y, 0.08 + aa.y, tile.y)
+          * (1.0 - smoothstep(0.14 - aa.y, 0.14 + aa.y, tile.y)) * facadeMask;
+        float office = step(0.5, buildingStyle);
+        // Exactly one warm apartment window per floor; every copy has the same count.
+        float litColumn = mod(cell.y, buildingBays);
+        float lit = (1.0 - step(0.5, abs(cell.x - litColumn))) * (1.0 - office);
+        vec3 apartmentWindow = mix(vec3(0.012, 0.025, 0.045), vec3(1.0, 0.42, 0.12), lit);
+        float glassSheen = 0.35 + 0.65 * smoothstep(0.05, 0.95, tile.y)
+          * (0.72 + 0.28 * sin((cell.x + cell.y) * 1.7));
+        vec3 officeWindow = mix(vec3(0.012, 0.075, 0.14), vec3(0.08, 0.48, 0.82), glassSheen);
+        vec3 windowColor = mix(apartmentWindow, officeWindow, office);
+        float floorEdge = min(tile.y, 1.0 - tile.y);
+        float apartmentBand = (1.0 - smoothstep(0.025, 0.07, floorEdge)) * facadeMask * (1.0 - office);
+        diffuseColor.rgb *= 1.0 - 0.28 * apartmentBand;
+        diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.10, 0.055, 0.038), vec3(0.025, 0.08, 0.13), office), frameMask * 0.92);
+        diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.28, 0.12, 0.07), vec3(0.08, 0.20, 0.28), office), sillMask * 0.75);
+        diffuseColor.rgb = mix(diffuseColor.rgb, windowColor, windowMask * mix(0.92, 0.96, office));
+        // View-independent key, roof occlusion and height gradient add depth without a shadow pass.
+        float faceLight = 0.60 + 0.48 * max(dot(facadeNormal, normalize(vec3(-0.55, -0.35, 0.76))), 0.0);
+        float heightLight = mix(0.86, 1.10, vBuildingUv.y);
+        float roofOcclusion = 1.0 - 0.16 * smoothstep(0.80, 1.0, vBuildingUv.y);
+        diffuseColor.rgb *= mix(1.0, faceLight * heightLight * roofOcclusion, facadeMask);
+        float rooftop = 1.0 - facadeMask;
+        diffuseColor.rgb = mix(diffuseColor.rgb, mix(vec3(0.22, 0.15, 0.12), vec3(0.055, 0.12, 0.18), office), rooftop * 0.78);
+      `,
+    );
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <emissivemap_fragment>",
+      /* glsl */ `
+        #include <emissivemap_fragment>
+        totalEmissiveRadiance += windowColor * windowMask * mix(lit * 0.34, 0.075, office);
+      `,
+    );
+  };
+  material.customProgramCacheKey = () => "skyhand-building-facade-r186-v3";
+  return material;
+}
+
+const apartmentBuildingMaterial = makeBuildingMaterial(0x9b5845, 0);
+const officeBuildingMaterial = makeBuildingMaterial(0x376f91, 1);
 
 function createBox(it) {
   const g = new THREE.Group();
@@ -720,15 +853,12 @@ function createBox(it) {
   };
   const k = it.kind;
   if (k === "building") {
-    const tex = windowTexture().clone();
-    tex.needsUpdate = true;
-    const shade = 0.85 + 0.25 * ((hash(it.name) % 100) / 100);
-    const mat = std(new THREE.Color(0x9aa0a8).multiplyScalar(shade).getHex(), { map: tex, roughness: 0.85 });
-    add(unitBox, mat);
-    add(unitBox, std(0x5b616a), 0, 0, 0.5, 1.0, 1.0, 0.01);              // roof
-    const e = new THREE.LineSegments(new THREE.EdgesGeometry(unitBox), new THREE.LineBasicMaterial({ color: 0x1b2027 }));
-    body.add(e);
-    g.userData.tex = tex;
+    const numbers = it.name.match(/\d+/g);
+    const ordinal = numbers ? Number(numbers[numbers.length - 1]) : hash(it.name);
+    const office = ordinal % 2 === 1;
+    add(office ? officeBuildingGeometry : apartmentBuildingGeometry,
+      office ? officeBuildingMaterial : apartmentBuildingMaterial);
+    g.userData.buildingType = office ? "office" : "apartment";
   } else if (k === "car") {
     const col = CAR_COLORS[hash(it.name) % CAR_COLORS.length];
     add(unitBox, std(col, { metalness: 0.4, roughness: 0.4 }), 0, 0, -0.15, 1, 1, 0.6);
@@ -774,7 +904,6 @@ function updateBox(g, it) {
   g.rotation.z = alongX ? Math.PI / 2 : 0;
   if (alongX) [sx, sy] = [sy, sx];
   g.userData.body.scale.set(sx, sy, sz);
-  if (g.userData.tex) g.userData.tex.repeat.set(Math.max(1, Math.round((sx + sy) / 6)), Math.max(1, Math.round(sz / 3)));
 }
 
 // ------------------------------------------------------------------ spheres by kind

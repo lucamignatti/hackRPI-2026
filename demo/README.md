@@ -115,6 +115,8 @@ The top bar always shows which mode is running, so the demo never misrepresents 
 - `rewardlang.py`: whitelisted reward-expression evaluator (`dist`, `distxy`, `inside`, ...) and plain-language explainer (fallback only).
 - `fake_env.py`: kinematic stand-in env with the spec's API and render-state schema (`--fake-env`, tests).
 - `web/index.html`, `web/main.js`, `web/style.css`: the viewer. three.js 0.186.1 (r186) from jsDelivr via an importmap.
+  City buildings alternate shared apartment and office silhouettes with procedural PBR facades; each
+  building remains a single mesh and owns no facade texture.
   The terrain heightfield becomes a mesh coloured by height (sand at the water line, grass, rock, snow on
   peaks; asphalt in a city), rebuilt only when the terrain changes (the world's 128 x 128 grid is built once
   per terrain version). Lakes are a flat plane at `water.level`, the ocean is the animated wave surface, and

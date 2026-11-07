@@ -657,6 +657,26 @@ def test_mainjs_r186_drone_model_and_shader():
     assert "fd.position.clone()" not in js
 
 
+def test_mainjs_building_variants_share_geometry_and_shader():
+    """Apartments and offices are deterministic one-mesh variants with a shared facade program."""
+    js = (WEB / "main.js").read_text()
+    for key in ("apartmentBuildingGeometry", "officeBuildingGeometry", "apartmentBuildingMaterial",
+                "officeBuildingMaterial", '"office" : "apartment"',
+                "skyhand-building-facade-r186-v3", "fwidth(gridPosition)", "buildingPart",
+                'setAttribute("buildingUv"', 'setAttribute("buildingFacade"',
+                "vec2 gridPosition = vBuildingUv", "float frameMask", "float roofOcclusion",
+                "buildingFloors: { value: office ? 5 : 4 }",
+                "buildingBays: { value: office ? 4 : 3 }"):
+        assert key in js, key
+    assert "updateBuildingUniforms" not in js
+    assert 'setAttribute("buildingSide"' not in js
+    assert "mesh.onBeforeRender" not in js
+    assert "facadePosition" not in js
+    assert "buildingTime" not in js
+    assert "windowTexture" not in js
+    assert "g.userData.tex" not in js
+
+
 def test_mainjs_wave_formula_matches_waves_params():
     waves = pytest.importorskip("skyhand.env.waves")
     keys = set(waves.WaveField(1).params(0))
