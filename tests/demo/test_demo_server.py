@@ -654,6 +654,15 @@ def test_mainjs_ocean_waves_stay_on_gpu():
     assert "waterGeo.computeVertexNormals" not in js
 
 
+def test_mainjs_smooths_held_payloads_without_frame_allocations():
+    """Carried items interpolate at display rate instead of snapping at the server tick rate."""
+    js = (WEB / "main.js").read_text()
+    assert "target: new THREE.Vector3(), held: false" in js
+    assert "for (let i = 0; i < heldItems.length; i++)" in js
+    assert "item.position.lerp(item.userData.target, a)" in js
+    assert "if (!it.held) g.position.copy(u.target)" in js
+
+
 def test_mainjs_r186_drone_model_and_shader():
     """The r186 viewer keeps drone detail shared, shader-local, and allocation-light."""
     js = (WEB / "main.js").read_text()

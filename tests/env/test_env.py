@@ -306,7 +306,11 @@ def test_terrain_litter_layout():
     dry = gz > lvl[:, None]
     assert dry[env.it_active].all()                                  # litter lies on dry land
     assert ((env.terrain.h < lvl[:, None, None]).flatten(1).float().mean(-1) > 0).any()   # lakes exist
-    assert "bird" not in SK                                          # no birds anywhere
+
+
+def test_birds_stay_removed_from_every_scene():
+    """Bird simulation and rendering are intentionally absent from the shared scene catalog."""
+    assert "bird" not in SK
 
 
 def test_tide_changes_water_level():

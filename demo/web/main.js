@@ -676,12 +676,18 @@ function createItem(it) {
       color: 0xff8a3d, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthWrite: false }));
     g.add(ring);
   }
-  g.userData = { body, mats, ring };
+  // Held payloads receive physics positions at the 20 Hz server rate.  Keep one target per
+  // item so the render loop can smooth that motion without allocating vectors every frame.
+  g.userData = { body, mats, ring, target: new THREE.Vector3(), held: false };
   return g;
 }
 function updateItem(g, it) {
   const d = itemDims(it);
-  g.position.set(...it.pos);
+  const u = g.userData;
+  u.target.set(...it.pos);
+  if (!it.held) g.position.copy(u.target);       // grounded/released items stay exact
+  else if (!u.held) g.position.copy(u.target);   // avoid sweeping up from the pickup point
+  u.held = !!it.held;
   g.userData.body.scale.set(d[0], d[1], d[2]);
   g.userData.dims = d;
   g.userData.info = it;
@@ -1112,6 +1118,7 @@ function updateAnimal(g, it) {
 let latest = null, latestAt = 0, curScene = null;
 let boatShown = false;
 const ordinaryBoxes = [];
+const heldItems = [];
 const $ = (id) => document.getElementById(id);
 
 function applyFrame(st) {
@@ -1172,6 +1179,8 @@ function applyFrame(st) {
   if (arenaChanged && drones[0]) { arenaChanged = false; setFollow(ARENA_HALF > 60, true); }
   boatShown = !!st.boat;
   syncPool(pools.items, st.items, (it) => it.type + ":" + it.shape + ":" + it.is_trash, createItem, updateItem);
+  heldItems.length = 0;
+  for (const item of pools.items.values()) if (item.visible && item.userData.held) heldItems.push(item);
   syncBuildings(st.boxes);
   ordinaryBoxes.length = 0;
   for (const box of st.boxes || []) if (box.kind !== "building") ordinaryBoxes.push(box);
@@ -1602,6 +1611,12 @@ function animate() {
   for (const d of drones) {
     d.position.lerp(d.userData.target, a);
     d.quaternion.slerp(d.userData.qtarget, a);
+  }
+  // Match held payloads to the drone's display-rate smoothing while preserving the
+  // server-simulated rope swing encoded in each target position.
+  for (let i = 0; i < heldItems.length; i++) {
+    const item = heldItems[i];
+    item.position.lerp(item.userData.target, a);
   }
   if (follow && fd) {
     followDelta.subVectors(fd.position, followBefore);
