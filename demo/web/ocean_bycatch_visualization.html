@@ -19,7 +19,7 @@
           <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Ocean — Net Fishing & Marine Wildlife Bycatch Avoidance</h2>
         </div>
         <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
-          Simulating <code class="text-cyan-400 font-mono">skyhand/env/animals.py</code> + <code class="text-cyan-400 font-mono">net.py</code>: 3 drones scooping fish while steering clear of protected <strong>whales, dolphins, and turtles</strong>.
+          Simulating <code class="text-cyan-400 font-mono">skyhand/env/animals.py</code> + <code class="text-cyan-400 font-mono">net.py</code>: 4 drones (one per net corner) scooping fish while steering clear of protected <strong>whales, dolphins, and turtles</strong>.
         </p>
       </div>
 
@@ -46,7 +46,7 @@
           </span>
         </div>
         <div id="phaseDesc" class="text-xs text-cyan-100/90 max-w-xs">
-          3-drone triangle formation sweeping net pocket under the fish school.
+          4-drone square formation sweeping net pocket under the fish school.
         </div>
       </div>
 
@@ -131,11 +131,12 @@
         this.phase = 1; // start with net held for immediate action
         this.bycatchTangled = 0;
 
-        // 3 Drones
+        // 4 Drones, one per corner of the rectangular net (skyhand/env/net.py)
         this.drones = [
-          { x: 2.0, y: 3.5, z: 1.2, holding: true, color: "#fbbf24" },
-          { x: -2.0, y: 3.5, z: 1.2, holding: true, color: "#22d3ee" },
-          { x: 0.0, y: -0.5, z: 1.2, holding: true, color: "#c084fc" }
+          { x: 2.4, y: 4.4, z: 1.2, holding: true, color: "#fbbf24" },
+          { x: -2.4, y: 4.4, z: 1.2, holding: true, color: "#22d3ee" },
+          { x: -2.4, y: -0.4, z: 1.2, holding: true, color: "#c084fc" },
+          { x: 2.4, y: -0.4, z: 1.2, holding: true, color: "#f472b6" }
         ];
 
         // Net Mesh (PBD simulation)
@@ -202,9 +203,10 @@
         }
 
         // 2. Net Centroid
-        this.netCenter.x = (this.drones[0].x + this.drones[1].x + this.drones[2].x) / 3;
-        this.netCenter.y = (this.drones[0].y + this.drones[1].y + this.drones[2].y) / 3;
-        this.netCenter.z = (this.drones[0].z + this.drones[1].z + this.drones[2].z) / 3 - 1.2;
+        const nD = this.drones.length;
+        this.netCenter.x = this.drones.reduce((acc, d) => acc + d.x, 0) / nD;
+        this.netCenter.y = this.drones.reduce((acc, d) => acc + d.y, 0) / nD;
+        this.netCenter.z = this.drones.reduce((acc, d) => acc + d.z, 0) / nD - 1.2;
 
         // 3. Drone Flight Coordinator
         let targetX = this.netCenter.x;
@@ -250,12 +252,13 @@
           targetZ = 1.4;
         }
 
-        // Drone formation flight
-        for (let i = 0; i < 3; i++) {
-          const angle = (i / 3) * Math.PI * 2;
-          const formationR = 2.4;
-          const dTargetX = targetX + Math.cos(angle) * formationR;
-          const dTargetY = targetY + Math.sin(angle) * formationR;
+        // Drone formation flight: one drone at each corner of the square net (+-r, +-r)
+        const formationR = 2.4;
+        const cornerOffsets = [[1, 1], [-1, 1], [-1, -1], [1, -1]];
+        for (let i = 0; i < this.drones.length; i++) {
+          const [ox, oy] = cornerOffsets[i % 4];
+          const dTargetX = targetX + ox * formationR;
+          const dTargetY = targetY + oy * formationR;
 
           this.drones[i].x += (dTargetX - this.drones[i].x) * 1.8 * DT;
           this.drones[i].y += (dTargetY - this.drones[i].y) * 1.8 * DT;
@@ -353,8 +356,8 @@
     document.getElementById("btnPhase").addEventListener("click", () => { sim.nextPhase(); });
 
     const phaseNames = [
-      { name: "Phase 1: Approach Handles", desc: "Drones fly in triangle formation toward floating net buoys." },
-      { name: "Phase 2: Grasp Net Corners", desc: "Engaging magnetic grippers on 3 corner nodes." },
+      { name: "Phase 1: Approach Handles", desc: "Drones fly in square formation toward the 4 floating net corner buoys." },
+      { name: "Phase 2: Grasp Net Corners", desc: "Engaging magnetic grippers on 4 corner nodes." },
       { name: "Phase 3: Trawl Under School", desc: "Skimming net under fish school while steering clear of marine wildlife." },
       { name: "Phase 4: Synchronous Lift", desc: "Lifting net pocket out of water, securing fish inside." },
       { name: "Phase 5: Haul to Cargo Boat", desc: "Team formation flight across ocean swell to vessel deck." },
@@ -485,26 +488,46 @@
         }
       }
 
-      // Draw 3-Drone Net Tension Lines & Mesh
-      const dP0 = project3D(sim.drones[0].x, sim.drones[0].y, sim.drones[0].z);
-      const dP1 = project3D(sim.drones[1].x, sim.drones[1].y, sim.drones[1].z);
-      const dP2 = project3D(sim.drones[2].x, sim.drones[2].y, sim.drones[2].z);
+      // Draw 4-Drone Net Tension Lines & Quad Mesh (corners in drone order around the rim)
+      const dPs = sim.drones.map(d => project3D(d.x, d.y, d.z));
       const netP = project3D(sim.netCenter.x, sim.netCenter.y, sim.netCenter.z);
 
-      if (dP0 && dP1 && dP2 && netP) {
+      if (dPs.every(p => p) && netP) {
+        // Rim of the rectangular net
         ctx.strokeStyle = "rgba(56, 189, 248, 0.7)";
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(dP0.x, dP0.y); ctx.lineTo(dP1.x, dP1.y);
-        ctx.lineTo(dP2.x, dP2.y); ctx.closePath();
+        ctx.moveTo(dPs[0].x, dPs[0].y);
+        for (let i = 1; i < dPs.length; i++) ctx.lineTo(dPs[i].x, dPs[i].y);
+        ctx.closePath();
         ctx.stroke();
 
-        ctx.strokeStyle = "rgba(56, 189, 248, 0.4)";
-        ctx.beginPath();
-        ctx.moveTo(dP0.x, dP0.y); ctx.lineTo(netP.x, netP.y);
-        ctx.moveTo(dP1.x, dP1.y); ctx.lineTo(netP.x, netP.y);
-        ctx.moveTo(dP2.x, dP2.y); ctx.lineTo(netP.x, netP.y);
-        ctx.stroke();
+        // Sagging mesh: interpolate a grid between the 4 corners, pulled toward the pocket
+        const N = 6;
+        const meshPt = (u, v) => {
+          const c0 = sim.drones[0], c1 = sim.drones[1], c2 = sim.drones[2], c3 = sim.drones[3];
+          const x = (1 - u) * (1 - v) * c0.x + u * (1 - v) * c1.x + u * v * c2.x + (1 - u) * v * c3.x;
+          const y = (1 - u) * (1 - v) * c0.y + u * (1 - v) * c1.y + u * v * c2.y + (1 - u) * v * c3.y;
+          const zRim = (1 - u) * (1 - v) * c0.z + u * (1 - v) * c1.z + u * v * c2.z + (1 - u) * v * c3.z;
+          const sag = 16 * u * (1 - u) * v * (1 - v); // 1 at centre, 0 on rim
+          return project3D(x, y, zRim + (sim.netCenter.z - zRim) * sag);
+        };
+        ctx.strokeStyle = "rgba(56, 189, 248, 0.35)";
+        ctx.lineWidth = 1;
+        for (let k = 1; k < N; k++) {
+          const t = k / N;
+          for (const dir of [0, 1]) {
+            ctx.beginPath();
+            let started = false;
+            for (let j = 0; j <= N; j++) {
+              const s2 = j / N;
+              const p = dir === 0 ? meshPt(t, s2) : meshPt(s2, t);
+              if (!p) continue;
+              if (!started) { ctx.moveTo(p.x, p.y); started = true; } else { ctx.lineTo(p.x, p.y); }
+            }
+            ctx.stroke();
+          }
+        }
 
         // Net pocket
         ctx.fillStyle = "rgba(14, 165, 233, 0.2)";
@@ -514,7 +537,7 @@
       }
 
       // Draw Drones
-      for (let i = 0; i < 3; i++) {
+      for (let i = 0; i < sim.drones.length; i++) {
         const d = sim.drones[i];
         const p = project3D(d.x, d.y, d.z);
         if (p) {

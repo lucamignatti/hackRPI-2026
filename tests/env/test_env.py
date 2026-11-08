@@ -306,11 +306,7 @@ def test_terrain_litter_layout():
     dry = gz > lvl[:, None]
     assert dry[env.it_active].all()                                  # litter lies on dry land
     assert ((env.terrain.h < lvl[:, None, None]).flatten(1).float().mean(-1) > 0).any()   # lakes exist
-    birds = env.sph_kind == SK["bird"]
-    b0 = env.sph_c[birds].clone()
-    for _ in range(10):
-        env.step(zeros(env))
-    assert (env.sph_c[birds] - b0).norm(dim=-1).min() > 0.3          # birds fly
+    assert "bird" not in SK                                          # no birds anywhere
 
 
 def test_tide_changes_water_level():

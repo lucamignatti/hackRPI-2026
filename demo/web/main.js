@@ -17,7 +17,7 @@ const EXAMPLES = {
   ],
   delivery: [
     "deliver the organ cooler to the drop-off pad as smoothly as possible and stay out of the no-fly zones",
-    "carry the cooler to the clinic pad, avoid the vultures",
+    "carry the cooler to the clinic pad and stay low over the hills",
     "fly to the drop-off pad",
   ],
   ocean: [
@@ -916,18 +916,6 @@ function createSphere(it) {
     g.add(m);
   } else if (it.kind === "canopy") {
     g.add(new THREE.Mesh(canopyGeo, std(0x2f7d32, { flatShading: true, roughness: 0.9 })));
-  } else if (it.kind === "bird") {
-    const dark = std(0x23262b, { roughness: 0.8 });
-    const body = new THREE.Mesh(unitSphere, dark);
-    body.scale.set(0.5, 0.22, 0.2);
-    g.add(body);
-    const wings = [];
-    for (const s of [-1, 1]) {
-      const w = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.9, 0.03).translate(0, 0.45 * s, 0), dark);
-      g.add(w);
-      wings.push([w, s]);
-    }
-    g.userData.wings = wings;
   } else {
     g.add(new THREE.Mesh(unitSphere, std(0x6b7a8f)));
   }
@@ -937,13 +925,7 @@ function createSphere(it) {
 function updateSphere(g, it) {
   g.position.set(...it.pos);
   const r = it.radius;
-  if (it.kind === "bird") {
-    const s = Math.max(r, 0.15) * 2.2;
-    g.scale.set(s, s, s);
-    const p = g.userData.prev;
-    if (p && Math.hypot(it.pos[0] - p[0], it.pos[1] - p[1]) > 1e-3) g.rotation.z = Math.atan2(it.pos[1] - p[1], it.pos[0] - p[0]);
-    g.userData.prev = it.pos.slice();
-  } else g.scale.set(r, r, it.kind === "canopy" ? r * 0.9 : it.kind === "rock" ? r * 0.7 : r);
+  g.scale.set(r, r, it.kind === "canopy" ? r * 0.9 : it.kind === "rock" ? r * 0.7 : r);
 }
 
 // ------------------------------------------------------------------ zones by kind
@@ -1588,10 +1570,6 @@ function animate() {
   for (const d of drones) {
     const dist = camera.position.distanceTo(d.position);
     d.userData.beacon.scale.setScalar(Math.max(1, dist / 40));
-  }
-  const tNow = performance.now() / 1000;
-  for (const g of pools.spheres.values()) {
-    if (g.userData.wings) for (const [w, s] of g.userData.wings) w.rotation.x = s * 0.6 * Math.sin(tNow * 12);
   }
   const waves = latest && latest.water && latest.water.waves;
   if (waves) {

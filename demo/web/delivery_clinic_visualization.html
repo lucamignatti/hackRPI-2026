@@ -16,10 +16,10 @@
       <div>
         <div class="flex items-center gap-2">
           <span class="inline-block w-3 h-3 rounded-full bg-rose-500 animate-pulse"></span>
-          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Delivery — 600m Rural Clinic Organ Transport & Vulture Avoidance</h2>
+          <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Delivery — 600m Rural Clinic Organ Transport & No-Fly Avoidance</h2>
         </div>
         <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
-          Simulating <code class="text-rose-400 font-mono">skyhand/env/scenes.py</code>: fast streamlined Zipline-style drone, remote African clinics, mesas, river valleys, and circling <strong>vultures</strong> in thermals.
+          Simulating <code class="text-rose-400 font-mono">skyhand/env/scenes.py</code>: fast streamlined Zipline-style drone, remote African clinics, mesas, river valleys, and a protected <strong>wildlife reserve no-fly zone</strong>.
         </p>
       </div>
 
@@ -59,10 +59,6 @@
           <span class="text-[var(--muted-foreground)]">Airspeed:</span>
           <span id="gaugeSpeed" class="font-mono font-bold text-cyan-300 text-sm">13.8 m/s (49.7 km/h)</span>
         </div>
-        <div class="flex justify-between items-center mt-0.5">
-          <span class="text-[var(--muted-foreground)]">Thermal Vulture Hazard:</span>
-          <span id="gaugeVultures" class="font-mono font-bold text-amber-400">Clear (Dist &gt; 40m)</span>
-        </div>
         <div class="flex justify-between items-center mt-1">
           <span class="text-[var(--muted-foreground)]">Organ Container:</span>
           <span class="font-mono text-emerald-400 font-semibold">SECURE (3.6°C)</span>
@@ -82,7 +78,6 @@
       <div class="absolute bottom-3 right-3 flex items-center gap-2.5 bg-black/60 backdrop-blur px-3 py-1.5 rounded-lg text-xs border border-zinc-700">
         <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-blue-500"></span> Clinic 1 (Pickup)</span>
         <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-emerald-500"></span> Clinic 2 (Drop)</span>
-        <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-amber-500"></span> Circling Vultures</span>
         <span class="flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded bg-red-500/50"></span> Wildlife Reserve</span>
       </div>
     </div>
@@ -105,9 +100,9 @@
         <div class="text-xs text-[var(--muted-foreground)]">East riverbank station</div>
       </div>
       <div>
-        <div class="text-[var(--muted-foreground)]">Circling Vulture Flocks</div>
-        <div class="font-mono text-amber-300 font-semibold text-sm">3 Birds in Thermal Core</div>
-        <div class="text-xs text-[var(--muted-foreground)]">Altitude: 35-50m</div>
+        <div class="text-[var(--muted-foreground)]">Wildlife Reserve No-Fly Zone</div>
+        <div id="statNoFly" class="font-mono text-red-300 font-semibold text-sm">Dist: --m</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Radius: 22m, ceiling 60m</div>
       </div>
     </div>
 
@@ -144,13 +139,6 @@
           holding: true
         };
 
-        // Circling Vultures (spheres orbiting high in thermals)
-        this.vultures = [
-          { orbitX: 0.0, orbitY: 10.0, z: 42.0, radius: 18.0, angle: 0.0, speed: 0.35 },
-          { orbitX: 0.0, orbitY: 10.0, z: 46.0, radius: 24.0, angle: Math.PI * 0.7, speed: 0.30 },
-          { orbitX: -15.0, orbitY: -5.0, z: 38.0, radius: 14.0, angle: Math.PI * 1.4, speed: -0.40 }
-        ];
-
         // Wildlife Reserve No-Fly Zone
         this.nofly = { x: 5.0, y: -25.0, radius: 22.0, height: 60.0 };
 
@@ -184,14 +172,7 @@
       step() {
         this.time += DT;
 
-        // 1. Update Vultures circling in thermals
-        for (const v of this.vultures) {
-          v.angle += v.speed * DT;
-          v.x = v.orbitX + Math.cos(v.angle) * v.radius;
-          v.y = v.orbitY + Math.sin(v.angle) * v.radius;
-        }
-
-        // 2. Drone Autopilot Waypoint Tracker
+        // 1. Drone Autopilot Waypoint Tracker
         let targetX = this.drone.x;
         let targetY = this.drone.y;
         let targetZ = 38.0; // Cruise altitude
@@ -207,15 +188,6 @@
         } else if (this.phase === 2) {
           // Cross-country transit to Clinic 2
           targetX = this.clinic2.x; targetY = this.clinic2.y; targetZ = 38.0;
-
-          // Vulture avoidance
-          for (const v of this.vultures) {
-            const dv = Math.hypot(this.drone.x - v.x, this.drone.y - v.y);
-            if (dv < 18.0) {
-              const push = (18.0 - dv) * 1.5;
-              targetY += ((this.drone.y - v.y) / (dv || 1)) * push;
-            }
-          }
 
           // No-fly reserve avoidance
           const dNf = Math.hypot(this.drone.x - this.nofly.x, this.drone.y - this.nofly.y);
@@ -329,7 +301,7 @@
     const phaseNames = [
       { name: "Phase 0: Liftoff Clinic 1", desc: "Ascending vertically from West Mesa Clinic 1 pickup pad." },
       { name: "Phase 1: Corridor Climb", desc: "Climbing to 38m cruise altitude to clear valley ridges." },
-      { name: "Phase 2: High-Speed Transit", desc: "Fast streamlined transit (14 m/s) navigating around vulture thermals." },
+      { name: "Phase 2: High-Speed Transit", desc: "Fast streamlined transit (14 m/s) skirting the wildlife reserve no-fly zone." },
       { name: "Phase 3: Clinic 2 Approach", desc: "Decelerating along descent glide path toward East Clinic 2." },
       { name: "Phase 4: Precision Touchdown", desc: "Gentle landing on the hospital emergency drop-off pad." },
       { name: "Phase 5: Medical Mission Complete", desc: "Organ cooler delivered safely into doctors' hands!" }
@@ -352,6 +324,8 @@
 
       const distC2 = Math.hypot(sim.drone.x - sim.clinic2.x, sim.drone.y - sim.clinic2.y).toFixed(0);
       document.getElementById("statDistClinic2").innerText = `Dist: ${distC2}m remaining`;
+      const distNf = Math.max(0, Math.hypot(sim.drone.x - sim.nofly.x, sim.drone.y - sim.nofly.y) - sim.nofly.radius).toFixed(0);
+      document.getElementById("statNoFly").innerText = `Dist: ${distNf}m to edge`;
       document.getElementById("statDroneAlt").innerText = `Alt: ${sim.drone.z.toFixed(1)}m ASL`;
 
       // Clear Canvas
@@ -422,23 +396,6 @@
         ctx.fillStyle = "#a7f3d0";
         ctx.font = "bold 11px monospace";
         ctx.fillText("CLINIC 2 (DROP-OFF)", c2P.x - 52, c2P.y + sz + 14);
-      }
-
-      // Circling Vultures in Thermal
-      for (const v of sim.vultures) {
-        const vp = project3D(v.x, v.y, v.z);
-        if (vp) {
-          // Bird wings
-          ctx.strokeStyle = "#f59e0b";
-          ctx.lineWidth = 2.5;
-          ctx.beginPath();
-          ctx.moveTo(vp.x - 8, vp.y + 3); ctx.lineTo(vp.x, vp.y); ctx.lineTo(vp.x + 8, vp.y + 3);
-          ctx.stroke();
-
-          ctx.fillStyle = "#fde68a";
-          ctx.font = "10px monospace";
-          ctx.fillText("🦅 VULTURE", vp.x - 24, vp.y - 8);
-        }
       }
 
       // Fast Delivery Drone (Streamlined fixed-wing/quad hybrid)

@@ -47,13 +47,13 @@ MAX_TILT = 0.6            # rad, controller tilt limit
 #           curb, a garbage truck as drop-off) or open terrain with scattered litter.
 # delivery: long-range, fast organ delivery between two remote clinics (Zipline-style,
 #           rural Africa): a 600 m arena of hills, mesas, a river valley and lakes,
-#           a clinic building at each pad, acacia trees, vultures, large no-fly
+#           a clinic building at each pad, acacia trees, large no-fly
 #           areas such as a wildlife reserve.
 # ocean:    team net fishing among fish schools and marine animals (bycatch).
 # world:    the generic pretraining world that contains all of the above at once: a
 #           400 m map with countryside, lakes, a coastline into open sea, a town with
 #           trash piles and a garbage truck, two clinics, a boat with the net, fish,
-#           animals, birds, and no-fly zones. Each task is a subset of this world.
+#           animals, and no-fly zones. Each task is a subset of this world.
 SCENES = ("trash", "delivery", "ocean", "world")
 TRASH_AGENTS = 1
 DELIVERY_AGENTS = 1
@@ -71,7 +71,7 @@ SCENE_EPISODE_STEPS = {"trash": 900, "delivery": 1800, "ocean": 900, "world": 18
 SCENE_TERRAIN_RES = {"trash": 64, "delivery": 64, "ocean": 64, "world": 128}
 TERRAIN_RES = 64          # heightfield samples per side (default; see SCENE_TERRAIN_RES)
 MAX_BOXES = 64            # buildings (packed city lots), cars, benches, hydrants, truck, boat hull, tree trunks ...
-MAX_SPHERES = 40          # rocks, tree canopies, birds
+MAX_SPHERES = 40          # rocks, tree canopies
 MAX_ITEMS = 16            # graspable objects per world
 NET_ROWS = 8
 NET_COLS = 8
@@ -336,7 +336,7 @@ class SkyEnvAPI(Protocol):
 #                # delivered items stay listed with delivered=True (trash rests where it was dropped)
 #   "boxes":     [{"name": str, "kind": "building"|"car"|"truck"|"bench"|"hydrant"|"trunk"|"boat"|"dropped"|"bin",
 #                  "pos": [3], "size": [3], "moving": bool}],
-#   "spheres":   [{"name": str, "kind": "rock"|"canopy"|"bird", "pos": [3], "radius": float, "moving": bool}],
+#   "spheres":   [{"name": str, "kind": "rock"|"canopy", "pos": [3], "radius": float, "moving": bool}],
 #   "zones":     [{"name": str, "pos": [3], "radius": float, "height": float,
 #                  "kind": "bin"|"truck"|"pad_pickup"|"pad_dropoff"|"nofly"|"boat"}],
 #   "anchors":   [{"pos": [3], "kind": str, "radius": float}],

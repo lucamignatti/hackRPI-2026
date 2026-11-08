@@ -110,17 +110,6 @@ def _trees_rocks(L: Layout, g: Ground, rng: random.Random, n_trees: int, n_rocks
         L.spheres.append(Sphere("rock", (x, y, g(x, y) + 0.3 * r), r))
 
 
-def _birds(L: Layout, g: Ground, rng: random.Random, n: int) -> None:
-    for _ in range(n):
-        cx, cy = rng.uniform(-H + 6, H - 6), rng.uniform(-H + 6, H - 6)
-        cz = max(g(cx, cy), g.water) + rng.uniform(5.0, 11.0)
-        rad = rng.uniform(4.0, 10.0)
-        w = rng.choice([-1, 1]) * rng.uniform(0.25, 0.6)
-        ph = rng.uniform(0, 2 * math.pi)
-        L.spheres.append(Sphere("bird", (cx + rad * math.cos(ph), cy + rad * math.sin(ph), cz), 0.35,
-                                (cx, cy, cz, rad, w, ph)))
-
-
 def _nofly(L: Layout, rng: random.Random, slot: int, keep_clear: List[Tuple[float, float, float]]) -> None:
     for _ in range(50):
         x, y, r = rng.uniform(-H + 6, H - 6), rng.uniform(-H + 6, H - 6), rng.uniform(2.5, 5.0)
@@ -253,7 +242,6 @@ def litter(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
         x, y = g.spot(rng, max_slope=0.15, avoid=avoid)
         L.boxes.append(Box("bench", (x, y, g(x, y) + 0.25), (0.8, 0.25, 0.25)))
     _trees_rocks(L, g, rng, rng.randint(3, 6), rng.randint(3, 6), avoid)
-    _birds(L, g, rng, rng.randint(2, 4))
     if rng.random() < nofly_prob:
         _nofly(L, rng, 1, [(bx, by, 2.0)] + [(x, y, 1.0) for _, x, y in L.items])
     L.drones = [_clear_start(L, g, rng, (bx, by), 4.0, 12.0, (2.5, 4.5))]
@@ -262,7 +250,7 @@ def litter(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
 
 # ---------------------------------------------------------------- delivery (long range, remote)
 def delivery(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
-    """Two remote clinics 300+ m apart, each with a clinic building; acacias, vultures,
+    """Two remote clinics 300+ m apart, each with a clinic building; acacias,
     and a wildlife-reserve no-fly zone that often sits across the route."""
     L = Layout("delivery")
     half = g.half - 15
@@ -303,15 +291,6 @@ def delivery(rng: random.Random, g: Ground, nofly_prob: float) -> Layout:
         x, y = g.spot(rng, max_slope=0.8, avoid=keep)
         r = rng.uniform(0.8, 2.0)
         L.spheres.append(Sphere("rock", (x, y, g(x, y) + 0.3 * r), r))
-    for _ in range(rng.randint(4, 7)):                   # vultures circling above the route
-        t = rng.uniform(0.15, 0.85)
-        cx, cy = ax + (bx - ax) * t + rng.uniform(-60, 60), ay + (by - ay) * t + rng.uniform(-60, 60)
-        cz = max(g(cx, cy), g.water) + rng.uniform(15.0, 60.0)
-        rad = rng.uniform(15.0, 45.0)
-        w = rng.choice([-1, 1]) * rng.uniform(6.0, 10.0) / rad
-        ph = rng.uniform(0, 2 * math.pi)
-        L.spheres.append(Sphere("bird", (cx + rad * math.cos(ph), cy + rad * math.sin(ph), cz), 0.8,
-                                (cx, cy, cz, rad, w, ph)))
     L.drones = [_clear_start(L, g, rng, (ax, ay), 6.0, 12.0, (3.0, 5.0))]
     return L
 
@@ -429,14 +408,6 @@ def world(rng: random.Random, res: int, half: float, nofly_prob: float) -> World
         keep.append((x, y, 1.0))
     L.items = L.items[:spec.MAX_ITEMS]
     _trees_rocks(L, g, rng, rng.randint(8, 12), rng.randint(4, 6), keep)
-    _birds(L, g, rng, rng.randint(4, 6))
-    for sp in L.spheres:                                       # birds over the bigger map
-        if sp.kind == "bird" and sp.orbit is not None:
-            cx, cy = rng.uniform(-half + 20, half - 20), rng.uniform(-half + 20, half - 20)
-            cz = max(g(cx, cy), 0.0) + rng.uniform(10.0, 40.0)
-            ox, oy, oz, rad, w_, ph = sp.orbit
-            sp.orbit = (cx, cy, cz, rad * 2.5, w_ / 2.5, ph)
-            sp.c = (cx + rad * 2.5 * math.cos(ph), cy + rad * 2.5 * math.sin(ph), cz)
     # ---- the sea: boat, net, and a deep-water disc for fish and animals
     sd = sea_dir
     perp = (-sd[1], sd[0])

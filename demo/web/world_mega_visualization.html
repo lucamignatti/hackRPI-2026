@@ -84,8 +84,8 @@
       </div>
       <div>
         <div class="text-[var(--muted-foreground)]">Ecosystem Inhabitants</div>
-        <div class="font-mono text-purple-300 font-semibold text-sm">Marine & Air Wildlife</div>
-        <div class="text-xs text-[var(--muted-foreground)]">Whales, dolphins, vultures</div>
+        <div class="font-mono text-purple-300 font-semibold text-sm">Marine Wildlife</div>
+        <div class="text-xs text-[var(--muted-foreground)]">Whales, dolphins, fish schools</div>
       </div>
     </div>
 
@@ -130,7 +130,6 @@
 
         // Wildlife
         this.whale = { x: 75, y: -60, z: -2.0, vx: 0.4, vy: 0.2 };
-        this.vulture = { orbitX: 15, orbitY: 45, radius: 18, angle: 0, speed: 0.4 };
         this.fish = [
           { x: 48, y: -35, z: -1.0 }, { x: 52, y: -37, z: -0.8 }, { x: 50, y: -34, z: -1.2 }
         ];
@@ -156,11 +155,6 @@
 
       step() {
         this.time += DT;
-
-        // Vulture in thermals
-        this.vulture.angle += this.vulture.speed * DT;
-        this.vulture.x = this.vulture.orbitX + Math.cos(this.vulture.angle) * this.vulture.radius;
-        this.vulture.y = this.vulture.orbitY + Math.sin(this.vulture.angle) * this.vulture.radius;
 
         // Whale wandering
         this.whale.x += this.whale.vx * DT;
@@ -328,14 +322,6 @@
         ctx.fillStyle = "#6366f1";
         ctx.beginPath(); ctx.ellipse(whP.x, whP.y, 16, 7, 0, 0, Math.PI * 2); ctx.fill();
         ctx.fillStyle = "#c7d2fe"; ctx.font = "10px monospace"; ctx.fillText("WHALE", whP.x - 16, whP.y - 10);
-      }
-
-      // Vulture in sky
-      const vuP = project3D(sim.vulture.x, sim.vulture.y, 35.0);
-      if (vuP) {
-        ctx.fillStyle = "#fbbf24";
-        ctx.font = "10px monospace";
-        ctx.fillText("🦅 VULTURE", vuP.x - 24, vuP.y);
       }
 
       // Drones

@@ -19,7 +19,7 @@
           <h2 class="font-bold text-base text-[var(--foreground)]">SkyHand Ocean — Multi-Agent Net Fishing & Team Coordination</h2>
         </div>
         <p class="text-xs text-[var(--muted-foreground)] mt-0.5">
-          Simulating <code class="text-emerald-400 font-mono">skyhand/env/net.py</code> + <code class="text-emerald-400 font-mono">expert.py</code>: 3 drones holding a mass-spring net, scooping fish schools, and hauling to the boat.
+          Simulating <code class="text-emerald-400 font-mono">skyhand/env/net.py</code> + <code class="text-emerald-400 font-mono">expert.py</code>: 4 drones (one per corner) holding a mass-spring net, scooping fish schools, and hauling to the boat.
         </p>
       </div>
 
@@ -51,7 +51,7 @@
           </span>
         </div>
         <div id="phaseDesc" class="text-xs text-cyan-100/90 max-w-xs">
-          Drones 0, 1, and 2 fly in transit lanes toward grabbable net corner buoys.
+          Drones 0, 1, 2, and 3 fly in transit lanes toward grabbable net corner buoys.
         </div>
       </div>
 
@@ -84,6 +84,7 @@
           <span class="w-2 h-2 rounded-full bg-amber-400"></span> Drone 0 (Yellow)
           <span class="w-2 h-2 rounded-full bg-cyan-400 ml-1"></span> Drone 1 (Cyan)
           <span class="w-2 h-2 rounded-full bg-purple-400 ml-1"></span> Drone 2 (Purple)
+          <span class="w-2 h-2 rounded-full bg-pink-400 ml-1"></span> Drone 3 (Pink)
         </span>
       </div>
     </div>
@@ -119,12 +120,14 @@
     // Multi-Agent Net & Ocean Simulation Logic
     // -------------------------------------------------------------
     const ARENA_HALF = 15.0;
-    const NUM_DRONES = 3;
+    const NUM_DRONES = 4; // one drone per net corner (skyhand/env/net.py)
     const NET_GRID = 6; // 6x6 spring mesh for smooth 60fps rendering
     const NUM_NODES = NET_GRID * NET_GRID;
     const NET_SPACING = 1.1; // meters
     const TOTAL_FISH = 32;
     const DT = 0.035;
+    // Formation offsets matching cornerIdx order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+    const CORNER_OFFSETS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
 
     class TeamNetSim {
       constructor() {
@@ -178,9 +181,9 @@
           NET_GRID * (NET_GRID - 1)
         ];
 
-        // 3 Team Drones holding corners (Drone 0 -> corner 0, Drone 1 -> corner 1, Drone 2 -> corner 2)
+        // 4 Team Drones holding corners (Drone i -> corner i)
         this.drones = [];
-        const droneColors = ["#fbbf24", "#22d3ee", "#c084fc"];
+        const droneColors = ["#fbbf24", "#22d3ee", "#c084fc", "#f472b6"];
         for (let i = 0; i < NUM_DRONES; i++) {
           const cornerNode = this.nodes[this.cornerIdx[i]];
           this.drones.push({
@@ -268,11 +271,11 @@
           const distToSchool = Math.hypot(dx, dy);
 
           for (let i = 0; i < NUM_DRONES; i++) {
-            // Team formation maintains net spread while moving toward school
-            const angle = (i / NUM_DRONES) * Math.PI * 2;
+            // Team formation keeps each drone at its own net corner (+-r, +-r) while moving toward school
+            const [ox, oy] = CORNER_OFFSETS[i];
             const spreadR = 2.4;
-            this.drones[i].targetX = schoolCenter.x + Math.cos(angle) * spreadR;
-            this.drones[i].targetY = schoolCenter.y + Math.sin(angle) * spreadR;
+            this.drones[i].targetX = schoolCenter.x + ox * spreadR;
+            this.drones[i].targetY = schoolCenter.y + oy * spreadR;
             this.drones[i].targetZ = 0.8; // keep net skimming low in the water
           }
 
@@ -300,9 +303,9 @@
         else if (this.phase === 4) {
           const distToBoat = Math.hypot(netCentroid.x - this.boat.x, netCentroid.y - this.boat.y);
           for (let i = 0; i < NUM_DRONES; i++) {
-            const angle = (i / NUM_DRONES) * Math.PI * 2;
-            this.drones[i].targetX = this.boat.x + Math.cos(angle) * 2.2;
-            this.drones[i].targetY = this.boat.y + Math.sin(angle) * 2.2;
+            const [ox, oy] = CORNER_OFFSETS[i];
+            this.drones[i].targetX = this.boat.x + ox * 2.2;
+            this.drones[i].targetY = this.boat.y + oy * 2.2;
             this.drones[i].targetZ = 3.0;
           }
           if (distToBoat < 1.2) {
@@ -346,9 +349,7 @@
         let maxStretch = 0.0;
         for (let idx = 0; idx < NUM_NODES; idx++) {
           const n = this.nodes[idx];
-          const isHeld = (idx === this.cornerIdx[0] && this.drones[0].holding) ||
-                         (idx === this.cornerIdx[1] && this.drones[1].holding) ||
-                         (idx === this.cornerIdx[2] && this.drones[2].holding);
+          const isHeld = this.isPinned(idx);
 
           if (!isHeld) {
             const waveZ = this.getWaveHeight(n.x, n.y, this.time);
@@ -395,12 +396,8 @@
 
                 if (dist > this.restDist) {
                   const corr = (dist - this.restDist) / dist * 0.45;
-                  const is1Pinned = (i1 === this.cornerIdx[0] && this.drones[0].holding) ||
-                                    (i1 === this.cornerIdx[1] && this.drones[1].holding) ||
-                                    (i1 === this.cornerIdx[2] && this.drones[2].holding);
-                  const is2Pinned = (i2 === this.cornerIdx[0] && this.drones[0].holding) ||
-                                    (i2 === this.cornerIdx[1] && this.drones[1].holding) ||
-                                    (i2 === this.cornerIdx[2] && this.drones[2].holding);
+                  const is1Pinned = this.isPinned(i1);
+                  const is2Pinned = this.isPinned(i2);
 
                   if (!is1Pinned && !is2Pinned) {
                     n1.x += dx * corr * 0.5; n1.y += dy * corr * 0.5; n1.z += dz * corr * 0.5;
@@ -545,6 +542,13 @@
         }
       }
 
+      isPinned(idx) {
+        for (let i = 0; i < this.drones.length; i++) {
+          if (idx === this.cornerIdx[i] && this.drones[i].holding) return true;
+        }
+        return false;
+      }
+
       getNetCentroid() {
         let x = 0, y = 0, z = 0;
         for (const n of this.nodes) { x += n.x; y += n.y; z += n.z; }
@@ -633,8 +637,8 @@
     const phaseNames = [
       { name: "Phase 1: Approach Corners", desc: "Drones fly in transit formation toward grabbable net buoy lines." },
       { name: "Phase 2: Descend & Grasp", desc: "Drones match net drift velocity and engage magnetic/weld gripper locks." },
-      { name: "Phase 3: Trawl Under School", desc: "Team flies in triangle formation skimming the sagging net pocket under fish." },
-      { name: "Phase 4: Synchronous Lift", desc: "All 3 drones ascend in unison to 3.2m, enclosing the school in the net!" },
+      { name: "Phase 3: Trawl Under School", desc: "Team flies in square formation (one drone per corner) skimming the sagging net pocket under fish." },
+      { name: "Phase 4: Synchronous Lift", desc: "All 4 drones ascend in unison to 3.2m, enclosing the school in the net!" },
       { name: "Phase 5: Haul to Boat Deck", desc: "Team navigates across ocean gusts holding the full net catch." },
       { name: "Phase 6: Catch Delivered", desc: "Net haul lowered onto the delivery vessel's cargo deck." }
     ];
@@ -658,7 +662,7 @@
 
       const c = sim.getNetCentroid();
       document.getElementById("statNetCenter").innerText = `X: ${c.x.toFixed(1)}, Y: ${c.y.toFixed(1)}, Z: ${c.z.toFixed(1)}m`;
-      document.getElementById("statGrip").innerText = sim.drones[0].holding ? "Grippers: LOCKED (3/3)" : "Grippers: OPEN";
+      document.getElementById("statGrip").innerText = `Grippers: ${sim.drones.filter(d => d.holding).length === NUM_DRONES ? "LOCKED" : (sim.drones.some(d => d.holding) ? "LOCKING" : "OPEN")} (${sim.drones.filter(d => d.holding).length}/${NUM_DRONES})`;
       document.getElementById("statDronesAlt").innerText = `Altitudes: ${sim.drones.map(d => d.z.toFixed(1) + 'm').join(', ')}`;
 
       // Clear Canvas
@@ -784,7 +788,7 @@
         }
       }
 
-      // 6. Draw 3 Drones with Quadrotor Arms
+      // 6. Draw 4 Drones with Quadrotor Arms
       for (let i = 0; i < NUM_DRONES; i++) {
         const d = sim.drones[i];
         const dpt = project3D(d.x, d.y, d.z);

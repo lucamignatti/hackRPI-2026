@@ -7,9 +7,9 @@ Scenes (see skyhand/spec.py)
 ----------------------------
 trash:    each world is a city (street grid, cars, trash piles at the curb, a
           garbage truck) or open terrain with scattered litter (rolling hills, lakes
-          with a tide, trees, rocks, birds). Trash and non-trash items can be grasped.
+          with a tide, trees, rocks). Trash and non-trash items can be grasped.
 delivery: organ cooler from pad_pickup to pad_dropoff across rugged terrain
-          (mountains, valleys, lakes), birds, no-fly zones.
+          (mountains, valleys, lakes), no-fly zones.
 ocean:    team net fishing with fish schools, whales, dolphins, turtles (bycatch).
 
 Contract: skyhand/spec.py. step() does not auto-reset; call reset(env_ids) for
@@ -49,7 +49,7 @@ FAR = 1.0e4
 ANCHOR_KIND = {k: i for i, k in enumerate(spec.ANCHOR_TYPES)}
 PRIV_TYPE = {k: i for i, k in enumerate(spec.PRIV_TYPES)}
 BOX_KINDS = ("building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "bin")
-SPHERE_KINDS = ("rock", "canopy", "bird")
+SPHERE_KINDS = ("rock", "canopy")
 ZONE_KINDS = ("bin", "truck", "pad_pickup", "pad_dropoff", "nofly", "boat")
 VARIANTS = ("city", "terrain", "delivery", "ocean", "world")
 BK = {k: i for i, k in enumerate(BOX_KINDS)}
@@ -147,7 +147,7 @@ class SkyEnv:
         self.box_kind = zl(n, B)
         self.lane_a, self.lane_b = zf(n, B, 2), zf(n, B, 2)
         self.lane_speed, self.lane_phase = zf(n, B), zf(n, B)
-        # spheres (rocks, canopies, birds)
+        # spheres (rocks, tree canopies)
         Sn = spec.MAX_SPHERES
         self.sph_c, self.sph_v, self.sph_r = zf(n, Sn, 3), zf(n, Sn, 3), zf(n, Sn)
         self.sph_active, self.sph_moving = zb(n, Sn), zb(n, Sn)
@@ -864,7 +864,7 @@ class SkyEnv:
         return m.scatter_add(1, self.it_held_by.clamp_min(0), torch.where(held, self.it_mass, torch.zeros_like(self.it_mass)))
 
     def _move_dynamic(self, dt: float, ids: Optional[torch.Tensor] = None) -> None:
-        """Cars along their lanes, birds on their orbits."""
+        """Cars along their lanes; spheres with an orbit circle it."""
         rows = slice(None) if ids is None else ids
         mv = self.box_moving[rows]
         if mv.any():

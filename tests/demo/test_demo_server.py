@@ -25,7 +25,7 @@ WEB = Path(__file__).resolve().parents[2] / "demo" / "web"
 RENDER_KEYS = {"t", "scene", "variant", "arena_half", "terrain", "water", "drones", "items", "boxes", "spheres",
                "zones", "anchors", "boat", "net", "fish", "animals", "lidar", "shield_hits", "wind"}
 BOX_KINDS = {"building", "car", "truck", "bench", "hydrant", "trunk", "boat", "dropped", "bin"}
-SPHERE_KINDS = {"rock", "canopy", "bird"}
+SPHERE_KINDS = {"rock", "canopy"}
 ZONE_KINDS = {"bin", "truck", "pad_pickup", "pad_dropoff", "nofly", "boat"}
 EXAMPLES = {"trash": "pick up the trash bag and put it in the bin without hitting the cars",
             "delivery": "deliver the organ cooler to the drop-off pad smoothly and stay out of the no-fly zones",

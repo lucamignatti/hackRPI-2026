@@ -292,7 +292,7 @@ def keyword_compile(text: str, scene: str, env) -> CompiledMission:
     reach_only = _has(t, "go to", "fly to", "hover", "visit", "touch", "land", "check on", "inspect") and \
         not _has(t_verbs, *carry_words)
     gentle = _has(t, "smooth", "gentle", "careful", "fragile", "steady", "softly", "no swing")
-    avoid = _has(t, "avoid", "obstacle", "car", "traffic", "moving", "safe", "without hitting", "bird", "tree",
+    avoid = _has(t, "avoid", "obstacle", "car", "traffic", "moving", "safe", "without hitting", "tree",
                  "building", "collide")
     no_fly = _has(t, "no-fly", "nofly", "no fly", "restricted", "airspace", "hospital")
     if scene in ("trash", "delivery"):
@@ -529,7 +529,7 @@ def world_compile(text: str, env) -> CompiledMission:
     n = int(env.num_agents)
     shared, per = split_by_drone(t, n)
     mods = {"gentle": _has(t, "smooth", "gentle", "careful", "fragile", "steady", "softly", "no swing", "tear"),
-            "avoid": _has(t, "avoid", "obstacle", "car", "traffic", "moving", "without hitting", "bird", "tree",
+            "avoid": _has(t, "avoid", "obstacle", "car", "traffic", "moving", "without hitting", "tree",
                           "building", "collide"),
             "no_fly": _has(t, "no-fly", "nofly", "no fly", "restricted", "airspace"),
             "careful": _has(t, "careful", "safe", *ANIMAL_WORDS),

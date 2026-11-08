@@ -130,10 +130,6 @@ class FakeEnv:
                                "radius": 1.5, "height": 0.1})
             self.item_types = ["cooler"]
             item_xy = [[pk[0] + 0.6, pk[1]]]
-            self.birds = [(float(r(1) * 30 - 15) * k, float(r(1) * 30 - 15) * k, 3.0 * k + 3 * float(r(1)), 15.0 + 40 * float(r(1)))
-                          for _ in range(4)]
-            for j in range(4):
-                self.spheres.append({"name": f"bird_{j}", "kind": "bird", "pos": [0, 0, 0], "radius": 0.6, "moving": True})
             for j in range(12):
                 x, y = float(r(1) * 40 - 20) * k, float(r(1) * 40 - 20) * k
                 self.boxes.append({"name": f"trunk_{j}", "kind": "trunk", "pos": [x, y, self.ground(x, y) + 1.5],
@@ -174,7 +170,7 @@ class FakeEnv:
 
     def _build_world(self, g: torch.Generator) -> None:
         """Hills, a lake and a coast (sea on the west), a town with a garbage truck, two clinics with
-        pads, countryside litter, the boat / net / fish / animals at sea, trees, rocks, birds
+        pads, countryside litter, the boat / net / fish / animals at sea, trees, rocks
         and two no-fly zones. Sea and lake share the tide level; waves everywhere on top."""
         r = lambda: float(torch.rand(1, generator=g))
         R, H = self.res, self.arena_half
@@ -221,7 +217,7 @@ class FakeEnv:
         # no-fly zones
         self.zones.append({"name": "nofly_0", "kind": "nofly", "pos": [0.0, 100.0, 0.0], "radius": 15.0, "height": 60.0})
         self.zones.append({"name": "nofly_1", "kind": "nofly", "pos": [120.0, -20.0, 0.0], "radius": 12.0, "height": 60.0})
-        # trees and rocks on land (away from the town and clinics), birds
+        # trees and rocks on land (away from the town and clinics)
         for j in range(14):
             tx, ty = 40.0 + 150.0 * r() - 60.0, 360.0 * r() - 180.0
             if (abs(tx - 40) < 50 and abs(ty + 60) < 40) or gr(tx, ty) < 1.0:
@@ -234,9 +230,6 @@ class FakeEnv:
             rx, ry = 100.0 * r(), 300.0 * r() - 150.0
             self.spheres.append({"name": f"rock_{j}", "kind": "rock", "pos": [rx, ry, gr(rx, ry) + 0.3],
                                  "radius": 0.8, "moving": False})
-        self.birds = [(150.0 * r() - 50.0, 300.0 * r() - 150.0, 25.0 + 20 * r(), 18.0 + 15 * r()) for _ in range(4)]
-        for j in range(4):
-            self.spheres.append({"name": f"bird_{j}", "kind": "bird", "pos": [0, 0, 0], "radius": 0.6, "moving": True})
         # items: curbside trash in town, countryside litter, things that are not trash, the organ cooler
         self.item_types = ["trash_bag", "pizza_box", "bottle", "cardboard_box", "bottle", "backpack", "ball",
                            "flower_pot", "cooler"]
@@ -451,12 +444,7 @@ class FakeEnv:
         out = []
         t = float(self.t[0])
         for s in self.spheres:
-            s = dict(s)
-            if s["kind"] == "bird":
-                cx, cy, rad, z = self.birds[int(s["name"].split("_")[1])]
-                w = 0.6 / rad * 3
-                s["pos"] = [cx + rad * math.cos(w * t), cy + rad * math.sin(w * t), z + 0.5 * math.sin(2 * t)]
-            out.append(s)
+            out.append(dict(s))
         return out
 
     def _animals_now(self) -> List[dict]:
