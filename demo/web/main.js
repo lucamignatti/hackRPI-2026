@@ -1449,7 +1449,6 @@ function showCard(m) {
     div.appendChild(c);
     ag.appendChild(div);
   }
-  const hasSegs = Array.isArray(m.segments) && m.segments.length > 0;
   const segs = $("card-segments");
   if (segs) {
     segs.innerHTML = "";
