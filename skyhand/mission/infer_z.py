@@ -54,6 +54,32 @@ def reward_to_z(reward_fn: RewardLike, B: Callable, g_samples: torch.Tensor, d: 
 
 
 @torch.no_grad()
+def rollout_best_state(reward_fn: RewardLike, g_samples: torch.Tensor,
+                       batch_size: int = 16384) -> Tuple[torch.Tensor, float, int]:
+    """Find (g*, max_r, best_idx) maximizing reward_fn over rollout states g_samples [..., G_DIM]."""
+    r_fn = _as_reward(reward_fn)
+    g = g_samples.reshape(-1, g_samples.shape[-1]).float()
+    r = torch.cat([r_fn(g[i:i + batch_size]) for i in range(0, g.shape[0], batch_size)]).float()
+    r = torch.nan_to_num(r, nan=-1e9, posinf=1e9, neginf=-1e9)
+    best_idx = int(torch.argmax(r).item())
+    return g[best_idx], float(r[best_idx].item()), best_idx
+
+
+@torch.no_grad()
+def argmax_rollout_z(reward_fn: RewardLike, B: Callable, g_samples: torch.Tensor,
+                     d: Optional[int] = None, batch_size: int = 16384) -> torch.Tensor:
+    """Compute z = B(g*) where g* = argmax_{g in g_samples} reward_fn(g).
+
+    Evaluates the Gemini/user reward on all states in the rollout, identifies the
+    state g* that achieves maximum reward, and maps it via the backward representation B
+    to the goal-directed FB task vector z, scaled to radius sqrt(d).
+    """
+    g_star, _, _ = rollout_best_state(reward_fn, g_samples, batch_size=batch_size)
+    b = B(g_star.unsqueeze(0)).float().reshape(-1)
+    return project_sphere(b, d or b.shape[-1])
+
+
+@torch.no_grad()
 def goal_z(B: Callable, g_goal: torch.Tensor, d: Optional[int] = None) -> torch.Tensor:
     """Goal reaching: z = sqrt(d) * normalize(B(g_goal)); several goals are averaged."""
     g = g_goal.reshape(-1, g_goal.shape[-1]).float()
@@ -72,9 +98,16 @@ def avoid_z(B: Callable, g_goal: torch.Tensor, g_forbidden: torch.Tensor, lam: f
 
 
 def mission_z(mission, B: Callable, g_samples: torch.Tensor, step: Optional[int] = None,
-              center: bool = False, agent: Optional[int] = None) -> torch.Tensor:
-    """reward_to_z for a MissionSpec (or one of its steps; agent picks a drone's own sub-mission)."""
+              center: bool = False, agent: Optional[int] = None,
+              method: str = "argmax") -> torch.Tensor:
+    """Compute task vector z for a MissionSpec (or one of its steps/segments).
+
+    method: "argmax" (default) uses z = B(argmax_{g in rollout} r(g));
+            "expectation" uses linear FB projection z_r = mean r(g) B(g).
+    """
     expr = mission.stage(step, agent).reward if hasattr(mission, "stage") else mission
+    if method == "argmax":
+        return argmax_rollout_z(expr, B, g_samples)
     return reward_to_z(expr, B, g_samples, center=center)
 
 

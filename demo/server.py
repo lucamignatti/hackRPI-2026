@@ -124,6 +124,8 @@ class DemoSession:
         self.status = "idle"
         self.message = "Type a mission and press Compile."
         self.step_count = 0
+        self.current_segment_idx = 0
+        self.segment_step_count = 0
         self.reward: Optional[float] = None
         self.reward_sum = 0.0
         self.cem_used = False
@@ -164,15 +166,32 @@ class DemoSession:
             m = self.pending
             if m is None:
                 raise ValueError("no compiled mission to approve")
+            self.current_segment_idx = 0
+            self.segment_step_count = 0
             ids = torch.arange(self.env.num_envs, device=self.env.device)
-            self.pipeline.bind(self.env, m, ids)
+            if m.agents or not (m.segments and len(m.segments) > 0):
+                self.pipeline.bind(self.env, m, ids)
+            else:
+                first_seg = m.segments[0]
+                if first_seg and first_seg.bindings:
+                    self.pipeline.bind(self.env, first_seg, ids)
+                else:
+                    self.pipeline.bind(self.env, m, ids)
             self.flying = False
             self.status, self.message = "computing z", "Computing the task vector z from the reward..."
             scene = self.scene
             episode = self._episode = self._episode + 1
         z = None
         if self.pipeline.agent is not None:
-            z = self.pipeline.compute_z(m.reward_fn, scene, m.anchors, self.sample_make_env, mission=m)   # [A, d] per drone
+            if m.agents:
+                z = self.pipeline.compute_z(m.reward_fn, scene, m.anchors, self.sample_make_env, mission=m, method="argmax")
+            elif m.segments and len(m.segments) > 1:
+                self.pipeline.compute_segment_zs(m, scene, self.sample_make_env, method="argmax")
+                z = m.segments[0].z
+            else:
+                z = self.pipeline.compute_z(m.reward_fn, scene, m.anchors, self.sample_make_env, mission=m, method="argmax")
+                if m.segments:
+                    m.segments[0].z = z
             with self.lock:
                 if self.pipeline.cem and self.env.num_envs > 1:
                     self.status, self.message = "refining z", "Refining z with CEM in cloned worlds..."
@@ -188,11 +207,12 @@ class DemoSession:
             self.obs = observe(self.env)
             if hasattr(self.controller, "reset"):
                 self.controller.reset()
-            self.step_count, self.reward_sum, self.reward = 0, 0.0, None
+            self.step_count, self.segment_step_count, self.reward_sum, self.reward = 0, 0, 0.0, None
             self.done_agents = set()
             self.flying, self.status = True, "flying"
             self.last_result = None
-            self.message = f"Flying: {m.text}"
+            seg_prefix = f"[Segment 1/{len(m.segments)}: {m.segments[0].text}] " if (m.segments and len(m.segments) > 1) else ""
+            self.message = f"{seg_prefix}Flying: {m.text}"
         return self.info()
 
     def stop(self) -> dict:
@@ -212,7 +232,8 @@ class DemoSession:
             if hasattr(self.controller, "reset"):
                 self.controller.reset()
             self.flying = False
-            self.step_count, self.reward, self.reward_sum = 0, None, 0.0
+            self.step_count, self.current_segment_idx, self.segment_step_count = 0, 0, 0
+            self.reward, self.reward_sum = 0.0, 0.0
             self.done_agents = set()
             self.status, self.message = "idle", "World reset. Compile a mission (or re-approve) to fly."
             if self.active is not None and self.pending is None:
@@ -298,23 +319,54 @@ class DemoSession:
             if not self.flying:
                 return
             self.step_count += 1
+            self.segment_step_count += 1
             m = self.active
             g0 = out.obs["g"][0]
+            seg = m.segments[self.current_segment_idx] if (m.segments and self.current_segment_idx < len(m.segments)) else None
             try:
                 if m.agent_reward_fns:   # per-drone jobs: mean of each drone's own reward
                     rs = [float(fn(g0[ag:ag + 1]).reshape(-1)[0]) for ag, fn in m.agent_reward_fns.items()
                           if ag < g0.shape[0]]
                     self.reward = sum(rs) / max(len(rs), 1)
+                elif seg is not None and seg.reward_fn is not None:
+                    self.reward = float(seg.reward_fn(g0[0:1]).reshape(-1)[0])
                 else:
                     self.reward = float(m.reward_fn(g0[0:1]).reshape(-1)[0])
                 self.reward_sum += self.reward
-                ok = self._done(m, g0)
+
+                # Check segment detector
+                ok = False
+                if m.agent_done_fns:
+                    ok = self._done(m, g0)
+                elif seg is not None and seg.done_fn is not None:
+                    ok = bool((seg.done_fn(g0).reshape(-1) > 0.5).any())
+                elif m.done_fn is not None:
+                    ok = bool((m.done_fn(g0).reshape(-1) > 0.5).any())
+
+                if not ok and not m.agents and seg is not None and seg.max_steps is not None and self.segment_step_count >= seg.max_steps:
+                    ok = True
             except Exception as e:  # never kill the loop on a bad program
                 log.warning("reward evaluation failed: %s", e)
                 ok = False
             delivered = self._is_carry(m) and "delivered" in out.events and bool(out.events["delivered"][0].any())
-            if ok:
-                who = " (every drone reached its goal)" if m.agent_done_fns else ""
+
+            # Auto-switch to next segment if detector fired and more segments remain
+            if not m.agents and (ok or (delivered and self.current_segment_idx < len(m.segments) - 1)) and m.segments and self.current_segment_idx < len(m.segments) - 1:
+                self.current_segment_idx += 1
+                self.segment_step_count = 0
+                self.done_agents.clear()
+                nxt = m.segments[self.current_segment_idx]
+                ids = torch.arange(env.num_envs, device=env.device)
+                if nxt.bindings:
+                    self.pipeline.bind(env, nxt, ids)
+                if nxt.z is not None:
+                    self.z = nxt.z
+                if hasattr(self.controller, "reset"):
+                    self.controller.reset()
+                self.message = f"Segment {self.current_segment_idx + 1}/{len(m.segments)}: {nxt.text}"
+                log.info("Transitioned to segment %d/%d: %s", self.current_segment_idx + 1, len(m.segments), nxt.text)
+            elif ok:
+                who = f" (all {len(m.segments)} segments complete)" if (m.segments and len(m.segments) > 1 and not m.agents) else (" (every drone reached its goal)" if m.agent_done_fns else "")
                 self._finish("success", f"Mission complete in {self.step_count * spec.POLICY_DT:.1f} s{who}.")
             elif delivered:
                 self._finish("success", f"Item delivered in {self.step_count * spec.POLICY_DT:.1f} s.")
@@ -375,6 +427,9 @@ class DemoSession:
             "policy_mode": self.pipeline.policy_mode,
             "mission_mode": self.active.source if self.active else (self.pending.source if self.pending else self.pipeline.mission_mode),
             "mission_text": self.active.text if self.active else None,
+            "current_segment": self.current_segment_idx if (self.active and self.active.segments) else 0,
+            "total_segments": len(self.active.segments) if (self.active and self.active.segments) else 1,
+            "segment_text": self.active.segments[self.current_segment_idx].text if (self.active and self.active.segments and self.current_segment_idx < len(self.active.segments)) else "",
             "reward": self.reward, "reward_sum": self.reward_sum if self.flying or self.last_result else None,
             "shield_hits": int(self.env.shield_count[0]) if hasattr(self.env, "shield_count") else 0,
             "swing": float(spec.g_field(g, "swing")[0]), "speed": float(spec.g_field(g, "speed")[0]),

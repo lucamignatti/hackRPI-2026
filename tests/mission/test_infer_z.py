@@ -5,7 +5,7 @@ import math
 import torch
 
 from skyhand import spec
-from skyhand.mission import TextToZ, avoid_z, build_dataset, cem_refine, goal_z, reward_to_z
+from skyhand.mission import TextToZ, argmax_rollout_z, avoid_z, build_dataset, cem_refine, goal_z, mission_z, reward_to_z, rollout_best_state
 
 from mission_fakes import PointMassEnv
 
@@ -87,3 +87,55 @@ def test_text2z_fit_predict(tmp_path):
     m.save(str(p))
     m2 = TextToZ.load(str(p))
     assert torch.allclose(m2.predict(texts[1]), m.predict(texts[1]))
+
+
+
+def test_argmax_rollout_z_finds_peak_state():
+    W, B = orthonormal_B()
+    T = 500
+    g = torch.randn(T, spec.G_DIM)
+    # Define a target goal state at index 42
+    target_idx = 42
+    g_target = g[target_idx]
+    
+    # Reward is negative distance squared to g_target in feature space
+    reward_fn = lambda gg: -((gg - g_target) ** 2).sum(dim=-1)
+    
+    # Find best state
+    best_g, max_r, best_idx = rollout_best_state(reward_fn, g)
+    assert best_idx == target_idx
+    assert abs(max_r) < 1e-5
+    assert torch.allclose(best_g, g_target)
+    
+    # Compute z via argmax_rollout_z
+    z = argmax_rollout_z(reward_fn, B, g, d=D)
+    assert z.shape == (D,)
+    assert abs(z.norm().item() - math.sqrt(D)) < 1e-4
+    
+    # Expected z is B(g_target) projected to sphere
+    b_expected = B(g_target.unsqueeze(0)).reshape(-1)
+    expected_z = math.sqrt(D) * b_expected / b_expected.norm()
+    assert torch.allclose(z, expected_z, atol=1e-4)
+
+
+def test_argmax_rollout_z_with_dsl_and_mission():
+    from skyhand.mission import compile_reward, MissionSpec
+    W, B = orthonormal_B()
+    g = torch.randn(100, spec.G_DIM)
+    # Force speed at index 10 to be highest
+    g[10, spec.G_SLICES["speed"]] = 25.0
+    
+    r_fn = compile_reward("speed")
+    z = argmax_rollout_z(r_fn, B, g, d=D)
+    assert z.shape == (D,)
+    assert abs(z.norm().item() - math.sqrt(D)) < 1e-4
+    
+    # Verify B(g[10]) matches z
+    b10 = B(g[10:11]).reshape(-1)
+    z10 = math.sqrt(D) * b10 / b10.norm()
+    assert torch.allclose(z, z10, atol=1e-4)
+    
+    # Test mission_z method="argmax"
+    ms = MissionSpec(scene="trash", reward="speed")
+    zm = mission_z(ms, B, g, method="argmax")
+    assert torch.allclose(zm, z, atol=1e-4)

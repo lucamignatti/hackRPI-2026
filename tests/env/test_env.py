@@ -664,6 +664,7 @@ def test_pretraining_uses_selectors():
 
 
 
+
 # ---------------------------------------------------------------- dense city, 4-drone ocean, net collisions, fish
 def test_city_is_densely_packed():
     import numpy as np
@@ -779,3 +780,23 @@ def test_arena_edge_is_a_soft_wall_not_a_terminal(scene):
         touched |= bool(out.events["shield"][0, 0])
         assert float(env.pos[0, 0, 0]) <= lim + 1e-4
     assert touched and float(env.pos[0, 0, 0]) > lim - 1.0               # pressed against the wall
+def test_selector_single_item_scene_no_out_of_bounds():
+    env = make_env("delivery", 1, lidar=False, seed=0)
+    env.bind_anchors([0], [AnchorBinding(kind="handle", entity="nearest:trash")])
+    env.holding[0, 0] = 2
+    src = env.anchor_src()
+    assert src.shape == (1, 1, spec.N_ANCHORS)
+
+
+def test_fake_env_selector_and_active_flags():
+    from demo.fake_env import FakeEnv
+    from demo.pipeline import Pipeline
+    pipe = Pipeline()
+    env = FakeEnv("trash")
+    m = pipe.compile("pick up all the trash", "trash", env)
+    pipe.bind(env, m, torch.tensor([0]))
+    obs = env.observe()
+    pos, kind, rad = env._anchor_state()
+    assert kind[0, 0] == spec.ANCHOR_TYPES.index("handle")
+    assert bool(obs["g"][0, 0, spec.G_SLICES["anchor_active"].start] == 1.0)
+    assert not torch.allclose(pos[0, 0, 0], torch.zeros(3))

@@ -385,3 +385,37 @@ def test_offline_goto_avoid():
     assert ms.anchors["a0"] == [2.0, -3.0, 4.0]
     ms, _ = _check_offline("delivery", DELIV, "do a backflip")
     assert "not understood" in ms.explanation
+
+
+
+def test_compound_maneuver_compile_segments():
+    """Verify compound prompt with maneuvers compiles into sequential segments with detectors."""
+    ents = {
+        "item_0": "trash_bag (trash) at [4.1, -2.0, 0.3]",
+        "item_0.handle": "trash_bag handle (grab here) at [4.1, -2.0, 0.6]",
+        "bin": "garbage truck drop-off at [12.0, 3.0, 0.0]",
+        "drone_0": "drone at [0.0, 0.0, 2.0]",
+    }
+    prompt = "Pick up the garbage bag, spin in a circle 3 times, wiggle up and down, then drop the garbage off."
+    ms = offline_compile(prompt, "trash", ents)
+    
+    assert ms.steps is not None
+    assert len(ms.steps) == 4
+    
+    # Step 0: Grab
+    assert "holding" in ms.steps[0].done_when
+    assert "grab" in ms.steps[0].explanation.lower()
+    
+    # Step 1: Spin
+    assert "speed" in ms.steps[1].reward
+    assert ms.steps[1].done_when == "speed > 0.8"
+    assert ms.steps[1].max_steps == 60
+    
+    # Step 2: Wiggle
+    assert "vz" in ms.steps[2].reward
+    assert ms.steps[2].done_when == "abs(vz) > 0.6"
+    assert ms.steps[2].max_steps == 60
+    
+    # Step 3: Drop off
+    assert "distxy" in ms.steps[3].done_when
+    assert "not holding" in ms.steps[3].done_when

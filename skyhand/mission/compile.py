@@ -51,6 +51,26 @@ _EXAMPLES = [
      }),
     ("trash",
      {"item_0": "trash_bag (trash) at [4.1, -2.0, 0.3]", "item_0.handle": "trash_bag handle (grab here) at [4.1, -2.0, 0.6]",
+      "bin": "garbage truck drop-off at [12.0, 3.0, 0.0]", "drone_0": "drone at [0.0, 0.0, 2.0]"},
+     "pick up the garbage bag, spin in a circle, wiggle up and down, then drop the garbage off", {
+         "anchors": {"a0": "item_0.handle", "a1": "bin", "a2": None, "a3": None},
+         "reward": "where(holding, 2 - dist(payload, a1), -dist(drone, a0)) - 0.5*(obstacle_dist < 0.5)",
+         "done_when": "distxy(payload, a1) < 1.0 and not holding",
+         "explanation": "Pick up the garbage bag, execute spin and wiggle maneuvers while holding it, and drop it in the garbage truck.",
+         "steps": [
+             {"reward": "-dist(drone, a0) + 3*holding", "done_when": "holding",
+              "explanation": "Fly to the garbage bag and grab its handle."},
+             {"reward": "speed - 0.5*abs(vz) + holding", "done_when": "speed > 0.8", "max_steps": 60,
+              "explanation": "Spin / circle while holding the bag."},
+             {"reward": "abs(vz) - 0.5*speed + holding", "done_when": "abs(vz) > 0.6", "max_steps": 60,
+              "explanation": "Wiggle up and down with vertical velocity while holding the bag."},
+             {"reward": "2 - dist(payload, a1) + holding - 0.5*(obstacle_dist < 0.5)",
+              "done_when": "distxy(payload, a1) < 1.0 and not holding",
+              "explanation": "Carry the garbage bag to the garbage truck and release it."},
+         ],
+     }),
+    ("trash",
+     {"item_0": "trash_bag (trash) at [4.1, -2.0, 0.3]", "item_0.handle": "trash_bag handle (grab here) at [4.1, -2.0, 0.6]",
       "item_1": "backpack at [3.5, -2.2, 0.2]", "item_1.handle": "backpack handle (grab here) at [3.5, -2.2, 0.4]",
       "item_2": "pizza_box (trash) at [6.0, -2.4, 0.1]",
       "item_2.handle": "pizza_box handle (grab here) at [6.0, -2.4, 0.2]", "item_3": "(inactive)",
@@ -743,9 +763,25 @@ def _single(text: str, scene: str, entities: Dict[str, str], drone: str = "drone
             expl = f"Fly to {lab}, grab its handle, carry it to {dest_txt} and let go"
             if gentle:
                 expl += " as smoothly as possible (low swing and jerk)"
+            maneuvers = []
+            if _has(t, "spin", "circle", "rotate"):
+                maneuvers.append({
+                    "reward": "speed - 0.5*abs(vz) + holding",
+                    "done_when": "speed > 0.8",
+                    "max_steps": 60,
+                    "explanation": f"Spin or circle while holding {lab}.",
+                })
+            if _has(t, "wiggle", "bob", "up and down"):
+                maneuvers.append({
+                    "reward": "abs(vz) - 0.5*speed + holding",
+                    "done_when": "abs(vz) > 0.6",
+                    "max_steps": 60,
+                    "explanation": f"Wiggle up and down while holding {lab}.",
+                })
             steps = [
                 {"reward": "-dist(drone, a0) + 3*holding" + wrong, "done_when": "holding",
                  "explanation": f"Grab the handle of {lab}."},
+                *maneuvers,
                 {"reward": "2 - dist(payload, a1) + holding" + gentle_pen, "done_when": done,
                  "explanation": f"Carry {lab} to {dest_txt} and release it."},
             ]

@@ -515,9 +515,10 @@ class FakeEnv:
         N, A, K = self.num_envs, self.num_agents, spec.N_ANCHORS
         names = self.entity_names()
         ent = self._entity_positions()
-        pos = torch.zeros(N, A, K, 3)
+        pos = self.drone.unsqueeze(2).expand(N, A, K, 3).clone()
         kind = torch.zeros(A, K, dtype=torch.long)
         rad = torch.zeros(A, K)
+        hand = self._handles()
         for a in range(A):
             for k, b in enumerate(self.bindings[a]):
                 if b.kind == "none":
@@ -527,11 +528,83 @@ class FakeEnv:
                     pos[:, a, k] = ent[:, names.index(b.entity)]
                     z = self._zone(b.entity)
                     rad[a, k] = b.radius or (z["radius"] if z else 0.0)
+                elif b.entity is not None and b.entity.startswith("nearest:"):
+                    sel = b.entity
+                    matched = False
+                    if sel in ("nearest:trash", "nearest:item") or sel.startswith("nearest:"):
+                        if sel == "nearest:net_corner" and self.has_net:
+                            cb = self.corner_base
+                            c_dists = []
+                            for c in range(4):
+                                m_idx = cb + c
+                                # skip corners held by teammates
+                                other_holds = any(int(self.held[0, o]) == m_idx for o in range(A) if o != a)
+                                if not other_holds:
+                                    c_dists.append((float((hand[0, m_idx] - self.drone[0, a]).norm()), m_idx))
+                            if c_dists:
+                                c_dists.sort()
+                                best_idx = c_dists[0][1]
+                                pos[:, a, k] = hand[:, best_idx]
+                                kind[a, k] = spec.ANCHOR_TYPES.index("handle")
+                                matched = True
+                        elif sel == "nearest:fish_school" and self.scene in ("ocean", "world"):
+                            s_dists = []
+                            for s in range(spec.N_FISH_SCHOOLS):
+                                sc = self._school_center(s)
+                                s_pt = torch.tensor([sc[0], sc[1], 0.0])
+                                s_dists.append((float((s_pt - self.drone[0, a]).norm()), s_pt))
+                            if s_dists:
+                                s_dists.sort(key=lambda x: x[0])
+                                pos[:, a, k] = s_dists[0][1]
+                                kind[a, k] = spec.ANCHOR_TYPES.index("point")
+                                matched = True
+                        elif sel == "nearest:animal" and self.scene in ("ocean", "world") and self.animals:
+                            a_dists = []
+                            t = float(self.t[0])
+                            for an in self.animals:
+                                ax = float(an["center"][0] + an["radius"] * math.cos(0.05 * t + an["phase"]))
+                                ay = float(an["center"][1] + an["radius"] * math.sin(0.05 * t + an["phase"]))
+                                apt = torch.tensor([ax, ay, 0.0])
+                                a_dists.append((float((apt - self.drone[0, a]).norm()), apt))
+                            if a_dists:
+                                a_dists.sort(key=lambda x: x[0])
+                                pos[:, a, k] = a_dists[0][1]
+                                kind[a, k] = spec.ANCHOR_TYPES.index("point")
+                                matched = True
+                        elif self.n_items > 0:
+                            h = int(self.held[0, a])
+                            # sticky to held item if it matches
+                            def _matches(typ_idx):
+                                typ = self.item_types[typ_idx]
+                                if sel == "nearest:trash":
+                                    return bool(TYPE_INFO[typ][4])
+                                if sel == "nearest:item":
+                                    return True
+                                return typ == sel.split(":", 1)[1]
+                            if h >= 0 and h < self.n_items and _matches(h):
+                                pos[:, a, k] = hand[:, h]
+                                kind[a, k] = spec.ANCHOR_TYPES.index("handle")
+                                matched = True
+                            else:
+                                i_dists = []
+                                for m in range(self.n_items):
+                                    if not bool(self.delivered[0, m]) and _matches(m):
+                                        i_dists.append((float((hand[0, m] - self.drone[0, a]).norm()), m))
+                                if i_dists:
+                                    i_dists.sort(key=lambda x: x[0])
+                                    best_m = i_dists[0][1]
+                                    pos[:, a, k] = hand[:, best_m]
+                                    kind[a, k] = spec.ANCHOR_TYPES.index("handle")
+                                    matched = True
+                    if not matched:
+                        kind[a, k] = 0
+                        pos[:, a, k] = self.drone[:, a]
                 elif b.point is not None:
                     pos[:, a, k] = torch.tensor([float(v) for v in b.point])
                     rad[a, k] = b.radius
                 else:
                     kind[a, k] = 0
+                    pos[:, a, k] = self.drone[:, a]
         return pos, kind, rad
 
     # ------------------------------------------------------------ obs
@@ -582,6 +655,7 @@ class FakeEnv:
         g[..., S["anchor_rel_drone"]] = rel.reshape(N, A, -1)
         g[..., S["anchor_rel_payload"]] = (apos - payload.unsqueeze(2)).reshape(N, A, -1)
         g[..., S["anchor_inside"]] = inside.float()
+        g[..., S["anchor_active"]] = (akind != 0).float().unsqueeze(0)
         g[..., S["obstacle_dist"]] = 10.0
         g[..., S["animal_dist"]] = 10.0
         g[..., S["mate_dist"]] = spec.FAR_DIST

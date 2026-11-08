@@ -43,6 +43,22 @@ MISSION_KEYWORD = "keyword parser"
 
 # ------------------------------------------------------------------ mission
 @dataclass
+class MissionSegment:
+    index: int
+    text: str
+    anchors: Dict[str, Any]
+    reward: str
+    done_when: Optional[str]
+    max_steps: Optional[int] = None
+    explanation: List[str] = field(default_factory=list)
+    reward_fn: Callable[[torch.Tensor], torch.Tensor] = field(repr=False, default=None)
+    done_fn: Optional[Callable[[torch.Tensor], torch.Tensor]] = field(repr=False, default=None)
+    bindings: List[AnchorBinding] = field(repr=False, default_factory=list)
+    per_agent_bindings: Optional[Dict[int, List[AnchorBinding]]] = field(repr=False, default=None)
+    z: Optional[torch.Tensor] = field(repr=False, default=None)
+
+
+@dataclass
 class CompiledMission:
     text: str
     scene: str
@@ -62,12 +78,18 @@ class CompiledMission:
     agents: Optional[Dict[int, Dict[str, Any]]] = None
     agent_reward_fns: Optional[Dict[int, Callable]] = field(repr=False, default=None)
     agent_done_fns: Optional[Dict[int, Optional[Callable]]] = field(repr=False, default=None)
+    segments: List[MissionSegment] = field(default_factory=list)
 
     def public(self, descriptions: Optional[Dict[str, str]] = None) -> dict:
         descriptions = descriptions or {}
         out = {"text": self.text, "scene": self.scene, "anchors": _public_anchors(self.anchors, descriptions),
                "reward": self.reward, "done_when": self.done_when, "explanation": self.explanation,
-               "source": self.source, "warnings": self.warnings, "agents": None}
+               "source": self.source, "warnings": self.warnings, "agents": None,
+               "segments": [
+                   {"index": s.index, "text": s.text, "reward": s.reward, "done_when": s.done_when,
+                    "max_steps": s.max_steps, "anchors": _public_anchors(s.anchors, descriptions)}
+                   for s in self.segments
+               ]}
         if self.agents:
             out["agents"] = {str(ag): {"task": j.get("task", ""), "reward": j.get("reward", ""),
                                        "done_when": j.get("done_when"),
@@ -575,11 +597,15 @@ def _finish(text, scene, anchors, reward, done, explanation, source, env, reward
     expl = rewardlang.explain(reward, done, shown, strict=bool(explanation))
     if explanation:
         expl = ([explanation] if isinstance(explanation, str) else list(explanation)) + expl
-    return CompiledMission(
+    rf = reward_fn or rewardlang.compile_expr(reward)
+    df = done_fn if done_fn is not None else (rewardlang.compile_expr(done) if done else None)
+    bnds = bindings or bindings_from_anchors(anchors, entity_kinds(env))
+    m = CompiledMission(
         text=text, scene=scene, anchors=anchors, reward=reward, done_when=done, explanation=expl, source=source,
-        reward_fn=reward_fn or rewardlang.compile_expr(reward),
-        done_fn=done_fn if done_fn is not None else (rewardlang.compile_expr(done) if done else None),
-        bindings=bindings or bindings_from_anchors(anchors, entity_kinds(env)), raw=raw)
+        reward_fn=rf, done_fn=df, bindings=bnds, raw=raw)
+    m.segments = [MissionSegment(index=0, text=text, anchors=anchors, reward=reward, done_when=done,
+                                 explanation=expl, reward_fn=rf, done_fn=df, bindings=bnds)]
+    return m
 
 
 # ------------------------------------------------------------------ external APIs
@@ -596,7 +622,7 @@ def _import_attr(names: Sequence[str], modules: Sequence[str]) -> Dict[str, Any]
     return found
 
 
-MISSION_NAMES = ("compile_mission", "offline_compile", "compile_reward", "to_bindings", "reward_to_z", "cem_refine")
+MISSION_NAMES = ("compile_mission", "offline_compile", "compile_reward", "to_bindings", "reward_to_z", "argmax_rollout_z", "cem_refine")
 
 
 def load_mission_api() -> Dict[str, Any]:
@@ -655,6 +681,17 @@ def reward_to_z_fallback(reward_fn, B, g_samples: torch.Tensor, d: int) -> torch
         b = B(g_samples).float().reshape(r.shape[0], -1)
         z = (r.unsqueeze(-1) * b).mean(0)
         return math.sqrt(d) * z / z.norm().clamp_min(1e-8)
+
+
+def argmax_rollout_z_fallback(reward_fn, B, g_samples: torch.Tensor, d: int) -> torch.Tensor:
+    """z = sqrt(d) * normalize(B(g*)) where g* = argmax_{g_i} r(g_i)."""
+    with torch.no_grad():
+        g = g_samples.reshape(-1, g_samples.shape[-1]).float()
+        r = reward_fn(g).float().reshape(-1)
+        r = torch.nan_to_num(r, nan=-1e9, posinf=1e9, neginf=-1e9)
+        best_idx = int(torch.argmax(r).item())
+        b = B(g[best_idx:best_idx + 1]).float().reshape(-1)
+        return math.sqrt(d) * b / b.norm().clamp_min(1e-8)
 
 
 def pca_2d(zs: np.ndarray) -> np.ndarray:
@@ -1026,6 +1063,40 @@ class Pipeline:
                       reward_fn=reward_fn, done_fn=done_fn, bindings=bindings, raw=ms)
         out.per_agent_bindings = binder
         out.warnings = warnings
+        # Build multi-segment list from MissionSpec.steps if available
+        steps = getattr(ms, "steps", None)
+        if steps:
+            comp = api.get("compile_reward", rewardlang.compile_expr)
+            segs = []
+            for idx, st in enumerate(steps):
+                st_anc = dict(_get(st, "anchors", {}) or {})
+                if not st_anc or all(v is None for v in st_anc.values()):
+                    st_anc = dict(anchors)
+                else:
+                    st_anc = {k: (v if (v is None or isinstance(v, str)) else list(v)) for k, v in st_anc.items()}
+                    for k in range(spec.N_ANCHORS):
+                        st_anc.setdefault(f"a{k}", None)
+                st_r = str(_get(st, "reward"))
+                st_d = _get(st, "done_when") or None
+                st_rf = comp(st_r)
+                st_df = comp(st_d) if st_d else None
+                st_bnds = bindings_from_anchors(st_anc, entity_kinds(env))
+                st_per = dict(binder) if (binder and (_get(st, "anchors") is None or st_anc == anchors)) else None
+                segs.append(MissionSegment(
+                    index=idx,
+                    text=str(_get(st, "explanation") or f"Step {idx + 1}"),
+                    anchors=st_anc,
+                    reward=st_r,
+                    done_when=st_d,
+                    max_steps=_get(st, "max_steps"),
+                    explanation=[str(_get(st, "explanation") or "")],
+                    reward_fn=st_rf,
+                    done_fn=st_df,
+                    bindings=st_bnds,
+                    per_agent_bindings=st_per,
+                ))
+            if segs:
+                out.segments = segs
         self._agents_from_spec(out, ms, env)
         return out
 
@@ -1064,7 +1135,8 @@ class Pipeline:
                 per = []
                 for x in b:
                     if env.num_agents > 1 and x.entity and x.entity.startswith("net.corner_"):
-                        c = (int(x.entity.rsplit("_", 1)[1]) + ag) % 4
+                        corner_part = x.entity.rsplit("_", 1)[1]
+                        c = ag % 4 if corner_part == "{agent}" else (int(corner_part) + ag) % 4
                         x = AnchorBinding(kind=x.kind, entity=f"net.corner_{c}", radius=x.radius)
                     per.append(x)
                 per_agent[ag] = per
@@ -1165,30 +1237,55 @@ class Pipeline:
         return g
 
     def compute_z(self, reward_fn, scene: str, anchors: Dict[str, Any], make_env,
-                  mission: Optional[CompiledMission] = None) -> Optional[torch.Tensor]:
+                  mission: Optional[CompiledMission] = None,
+                  method: str = "argmax") -> Optional[torch.Tensor]:
         """z [d] for a shared mission; [A, d] (one z per drone) when the mission gives drones their own
         jobs (mission.agent_reward_fns): drone i's z comes from its own reward on the g its own
-        anchors produce."""
+        anchors produce.
+
+        method: "argmax" (default) evaluates rollout states and computes z = B(argmax r(g));
+                "expectation" uses linear FB projection z_r = mean r(g) B(g).
+        """
         if self.agent is None:
             return None
         if mission is not None and mission.agent_reward_fns:
             g = self._g_samples(scene, anchors, make_env, per_agent=mission.per_agent_bindings,
                                 per_drone=True).to(self.device)
             zs = [self._z_from(mission.agent_reward_fns[ag] if ag in mission.agent_reward_fns else reward_fn,
-                               g[:, ag]) for ag in range(g.shape[1])]
+                               g[:, ag], method=method) for ag in range(g.shape[1])]
             return torch.stack(zs)
         g = self._g_samples(scene, anchors, make_env,
                             per_agent=mission.per_agent_bindings if mission is not None else None).to(self.device)
-        return self._z_from(reward_fn, g)
+        return self._z_from(reward_fn, g, method=method)
 
-    def _z_from(self, reward_fn, g: torch.Tensor) -> torch.Tensor:
+    def _z_from(self, reward_fn, g: torch.Tensor, method: str = "argmax") -> torch.Tensor:
         B = self.agent.encode_g
+        d = int(self.agent.d)
+        if method == "argmax":
+            if "argmax_rollout_z" in self.mission_api:
+                try:
+                    return torch.as_tensor(self.mission_api["argmax_rollout_z"](reward_fn, B, g, d)).float().reshape(-1)
+                except Exception as e:
+                    log.warning("argmax_rollout_z failed (%s); using fallback formula", e)
+            return argmax_rollout_z_fallback(reward_fn, B, g, d).reshape(-1)
         if "reward_to_z" in self.mission_api:
             try:
-                return torch.as_tensor(self.mission_api["reward_to_z"](reward_fn, B, g, int(self.agent.d))).float().reshape(-1)
+                return torch.as_tensor(self.mission_api["reward_to_z"](reward_fn, B, g, d)).float().reshape(-1)
             except Exception as e:
                 log.warning("reward_to_z failed (%s); using built-in formula", e)
-        return reward_to_z_fallback(reward_fn, B, g, int(self.agent.d)).reshape(-1)
+        return reward_to_z_fallback(reward_fn, B, g, d).reshape(-1)
+
+    def compute_segment_zs(self, mission: CompiledMission, scene: str, make_env,
+                           method: str = "argmax") -> List[torch.Tensor]:
+        """Compute task vector z for every segment in mission.segments."""
+        if self.agent is None or not mission.segments:
+            return []
+        zs = []
+        for seg in mission.segments:
+            if seg.z is None:
+                seg.z = self.compute_z(seg.reward_fn, scene, seg.anchors, make_env, method=method)
+            zs.append(seg.z)
+        return zs
 
     def refine_z(self, env, z0, reward_fn, done_fn=None, n_candidates: Optional[int] = None):
         """CEM refinement in clones of world 0 (needs env.num_envs > 1 and --cem)."""

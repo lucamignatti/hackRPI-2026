@@ -916,3 +916,69 @@ def test_real_mission_package_compiles(scene):
         assert not isinstance(t, str) or t.replace("{agent}", "0") in names, (k, t)
     assert s.approve()["flying"] is True
     s.tick()
+
+
+
+def test_multi_segment_execution_and_switching():
+    """Verify that a multi-segment mission automatically switches z vectors as detectors fire."""
+    pipe = P.Pipeline(agent=FakeAgent(8))
+    s = make_session("trash", seed=2, pipeline=pipe)
+    
+    prompt = "pick up the garbage bag, spin in a circle, wiggle up and down, then drop the garbage off"
+    data = s.compile(prompt)
+    assert "segments" in data
+    assert len(data["segments"]) == 4
+    assert len(s.pending.segments) == 4
+    
+    s.approve()
+    assert s.flying
+    assert s.current_segment_idx == 0
+    assert s.z is not None
+    z0 = s.z.clone()
+    
+    # Keep gripper closed during segments 0-2 so FakeEnv retains the item
+    s.controller = lambda obs, z: torch.tensor([[[0.0, 0.0, 0.0, 0.0, 1.0]]])
+    
+    # Segment 0: Done when holding
+    s.env.held[0, 0] = 0
+    s.env.grip[0, 0] = True
+    s.tick()
+    
+    assert s.flying
+    assert s.current_segment_idx == 1
+    assert "Segment 2/4" in s.message
+    z1 = s.z.clone()
+    assert not torch.allclose(z0, z1)
+    
+    # Segment 1: Done when speed > 0.8
+    s.env.vel[0, 0, 0] = 5.0
+    s.tick()
+    
+    assert s.flying
+    assert s.current_segment_idx == 2
+    assert "Segment 3/4" in s.message
+    z2 = s.z.clone()
+    assert not torch.allclose(z1, z2)
+    
+    # Segment 2: Done when abs(vz) > 0.6
+    s.env.vel[0, 0, 2] = 5.0
+    s.tick()
+    
+    assert s.flying
+    assert s.current_segment_idx == 3
+    assert "Segment 4/4" in s.message
+    z3 = s.z.clone()
+    assert not torch.allclose(z2, z3)
+    
+    # Segment 3: Fly over bin and release item to complete delivery
+    bin_pos = s.env.zones[0]['pos']
+    s.env.drone[0, 0] = torch.tensor([bin_pos[0], bin_pos[1], 2.0])
+    s.env.items[0, 0] = torch.tensor([bin_pos[0], bin_pos[1], 2.0])
+    s.env.held[0, 0] = 0
+    s.env.grip[0, 0] = True
+    s.controller = lambda obs, z: torch.tensor([[[0.0, 0.0, 0.0, 0.0, -1.0]]])
+    s.tick()
+    
+    assert not s.flying
+    assert s.status == "success"
+    assert "all 4 segments complete" in s.message

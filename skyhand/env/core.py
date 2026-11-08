@@ -523,13 +523,17 @@ class SkyEnv:
                 typ = self.it_type[:, it]                                             # [N, C]
                 if sel == "nearest:trash":
                     ok = self.catalog.is_trash[typ]
+                    ok_all = self.catalog.is_trash[self.it_type]
                 elif sel == "nearest:item":
                     ok = torch.ones_like(typ, dtype=torch.bool)
+                    ok_all = torch.ones_like(self.it_type, dtype=torch.bool)
                 else:
-                    ok = typ == self.catalog.id(sel.split(":", 1)[1])
+                    tid = self.catalog.id(sel.split(":", 1)[1])
+                    ok = typ == tid
+                    ok_all = self.it_type == tid
                 valid &= ok.unsqueeze(1)
                 hk = self.holding.clamp(0, spec.MAX_ITEMS - 1)
-                h_ok = held_item & torch.gather(ok, 1, hk)
+                h_ok = held_item & torch.gather(ok_all, 1, hk)
                 sticky = torch.where(h_ok, self._item_handle_ent[hk], sticky)
             elif sel == "nearest:net_corner":
                 free = (self.corner_held_by < 0).unsqueeze(1) | \

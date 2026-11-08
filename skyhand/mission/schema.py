@@ -168,7 +168,7 @@ def resolve_entity(name: str, entities: Sequence[str], agent: int = 0, scene: Op
         return concrete
     sel = re.sub(r"^(?:the_)?(?:nearest|closest)[_:\s]+(?:the_)?", "nearest:", re.sub(r"[\s\-]+", "_", concrete.strip().lower()))
     sel = {"nearest:corner": "nearest:net_corner", "nearest:school": "nearest:fish_school",
-           "nearest:bag": "nearest:trash_bag"}.get(sel, sel)
+           "nearest:fish": "nearest:fish_school", "nearest:bag": "nearest:trash_bag"}.get(sel, sel)
     if sel in S.SELECTOR_KIND:                     # "nearest:trash", "closest pizza box", ...
         return sel
     alias = _alias(concrete, entities, scene)
@@ -245,6 +245,7 @@ class MissionStep(BaseModel):
     anchor_radius: Optional[Dict[str, float]] = None
     reward: str
     done_when: Optional[str] = None
+    max_steps: Optional[int] = None
     explanation: str = ""
 
     @field_validator("anchors", mode="before")
@@ -424,7 +425,7 @@ class MissionSpec(BaseModel):
         return MissionStep(anchors=st.anchors if st.anchors is not None else top.anchors,
                            anchor_kinds=st.anchor_kinds if st.anchor_kinds is not None else top.anchor_kinds,
                            anchor_radius=st.anchor_radius if st.anchor_radius is not None else top.anchor_radius,
-                           reward=st.reward, done_when=st.done_when, explanation=st.explanation)
+                           reward=st.reward, done_when=st.done_when, max_steps=st.max_steps, explanation=st.explanation)
 
     def n_steps(self, agent: Optional[int] = None) -> int:
         """Number of steps in drone `agent`'s mission (0 = no chain)."""
