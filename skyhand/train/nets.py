@@ -238,7 +238,7 @@ class FEnsemble(nn.Module):
 
 
 class BNet(nn.Module):
-    """Backward embedding B(g): MLP blocks over g / g_scale, L2-normalised to sqrt(d)."""
+    """Backward embedding B(g): MLP blocks over spec.g_normalize(g), L2-normalised to sqrt(d)."""
 
     def __init__(self, d: int, width: int = 256, blocks: int = 3):
         super().__init__()
@@ -250,7 +250,7 @@ class BNet(nn.Module):
         self.out = nn.Linear(width, d)
 
     def forward(self, g: torch.Tensor) -> torch.Tensor:
-        x = self.inp(g / self.scale)
+        x = self.inp(spec.g_normalize(g, self.scale))
         for b in self.blocks:
             x = b(x)
         return sphere(self.out(self.norm(x)))
@@ -270,7 +270,7 @@ class Discriminator(nn.Module):
 
     def features(self, g: torch.Tensor, z: torch.Tensor) -> torch.Tensor:
         """Concatenated, normalised input (used for the gradient penalty)."""
-        return torch.cat([g / self.scale, sphere(z) / math.sqrt(self.d)], -1)
+        return torch.cat([spec.g_normalize(g, self.scale), sphere(z) / math.sqrt(self.d)], -1)
 
     def logits_from_features(self, x: torch.Tensor) -> torch.Tensor:
         x = self.inp(x)

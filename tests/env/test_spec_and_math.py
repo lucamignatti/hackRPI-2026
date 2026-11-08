@@ -75,3 +75,22 @@ def test_py39_compatible_env_and_spec():
         assert not any(type(n).__name__ == "Match" for n in ast.walk(tree)), f"match statement in {p}"
         if src.strip() and any(isinstance(n, (ast.FunctionDef, ast.ClassDef)) for n in tree.body):
             assert "from __future__ import annotations" in src, f"{p} lacks future annotations"
+
+
+def test_goal_space_has_no_absolute_position():
+    assert "drone_pos" not in spec.G_SLICES
+
+
+def test_g_normalize_compresses_long_vectors_but_keeps_direction():
+    g = torch.zeros(3, spec.G_DIM)
+    s = spec.G_SLICES["anchor_rel_drone"]
+    g[0, s.start:s.start + 3] = torch.tensor([3.0, 4.0, 0.0])            # 5 m: well inside one scale length
+    g[1, s.start:s.start + 3] = torch.tensor([300.0, 400.0, 0.0])        # 500 m delivery leg
+    g[2, spec.G_SLICES["speed"]] = 6.0                                   # scalar fields: plain g / scale
+    x = spec.g_normalize(g)
+    v0, v1 = x[0, s.start:s.start + 3], x[1, s.start:s.start + 3]
+    assert abs(float(v0.norm()) - 0.2) < 0.03                            # ~ |v| / 25
+    assert float(v1.norm()) < 3.5                                        # log1p(20) ~ 3.04, not 20
+    assert torch.allclose(v1 / v1.norm(), torch.tensor([0.6, 0.8, 0.0]), atol=1e-5)
+    assert float(x[2, spec.G_SLICES["speed"]]) == 1.0
+    assert torch.equal(spec.g_normalize(torch.zeros(1, spec.G_DIM)), torch.zeros(1, spec.G_DIM))

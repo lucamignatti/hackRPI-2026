@@ -720,3 +720,26 @@ def test_net_never_tears_corner_slips_instead():
     assert not bool(out.done[0])                                         # no tear, the episode goes on
     assert bool(out.events["slip"][0, 0]) and bool(out.events["release"][0, 0])
     assert int(env.corner_held_by[0, 0]) == -1 and int(env.holding[0, 0]) == -1
+
+
+@pytest.mark.parametrize("scene", SCENES)
+def test_distance_fields_use_one_cap_in_every_scene(scene):
+    env = make_env(scene, 2, lidar=False)
+    g = env.step(zeros(env)).obs["g"]
+    for name in ("mate_dist", "animal_dist", "obstacle_dist"):
+        v = spec.g_field(g, name)
+        assert float(v.max()) <= spec.FAR_DIST + 1e-4, (scene, name)
+    if env.num_agents == 1:
+        assert torch.all(spec.g_field(g, "mate_dist") == spec.FAR_DIST)
+    if scene in ("trash", "delivery"):
+        assert torch.all(spec.g_field(g, "animal_dist") == spec.FAR_DIST)
+
+
+def test_only_the_crashed_drone_is_terminal():
+    env = make_env("ocean", 2, lidar=False, shield=False)
+    env.pos[0, 1] = env.net.pos[0, 27] + torch.tensor([0.0, 0.0, 0.2])   # drone 1 flies into the net
+    env.vel.zero_()
+    out = env.step(zeros(env))
+    assert bool(out.done[0]) and not bool(out.done[1])
+    ad = out.info["agent_done"]
+    assert ad[0].tolist() == [False, True, False, False] and not ad[1].any()

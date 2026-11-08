@@ -36,7 +36,7 @@ class Config:
     action_queries: bool = True        # critics: add an action embedding to every query, not only an action token
 
     # ------------------------------------------------------------ optimisation (PLAN 7.4)
-    gamma: float = 0.99
+    gamma: float = 0.995                # ~10 s lookahead at 20 Hz: delivery / world legs run 17-40 s
     lr_f: float = 1e-4
     lr_actor: float = 1e-4
     lr_critic: float = 1e-4            # Q_D, Q_R

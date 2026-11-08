@@ -129,7 +129,8 @@ class Trainer:
                 expert = use
         out = env.step(act)
         reset = out.done | out.truncated
-        self.buffer.add(st.obs, act, out.obs, out.done, reset, st.wz.z, st.world_offset, stream=st.idx,
+        done = out.info.get("agent_done", out.done) if out.info else out.done   # per drone: teammates truncate
+        self.buffer.add(st.obs, act, out.obs, done, reset, st.wz.z, st.world_offset, stream=st.idx,
                         expert=expert)
         if reset.any():
             st.obs = env.reset(torch.nonzero(reset).squeeze(-1))

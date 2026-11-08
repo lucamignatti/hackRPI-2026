@@ -169,7 +169,7 @@ class FakeEnv:
 
 
 class PointMassEnv:
-    """Batched single-drone point mass: velocity = action[:3] * MAX_SPEED. g has drone_pos, drone_vel, speed
+    """Batched single-drone point mass: velocity = action[:3] * MAX_SPEED. g has drone_vel, speed
     and anchor_rel_drone[0] for a bound fixed point. Implements the env API cem_refine needs."""
 
     def __init__(self, num_envs: int, start=(0.0, 0.0, 2.0)):
@@ -195,7 +195,6 @@ class PointMassEnv:
     def observe(self):
         obs = spec.empty_obs(self.num_envs, 1)
         g = obs["g"]
-        g[..., spec.G_SLICES["drone_pos"]] = self.pos
         g[..., spec.G_SLICES["drone_vel"]] = self.vel
         g[..., spec.G_SLICES["speed"]] = self.vel.norm(dim=-1, keepdim=True)
         ard = spec.G_SLICES["anchor_rel_drone"].start

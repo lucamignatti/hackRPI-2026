@@ -585,7 +585,6 @@ class FakeEnv:
         payload = torch.where((lh >= 0).unsqueeze(-1),
                               torch.gather(self.items, 1, lh.clamp_min(0).unsqueeze(-1).expand(N, A, 3)),
                               self.drone)
-        g[..., S["drone_pos"]] = self.drone
         g[..., S["drone_vel"]] = self.vel
         g[..., S["speed"]] = self.vel.norm(dim=-1, keepdim=True)
         g[..., S["height"]] = height.unsqueeze(-1)
@@ -597,7 +596,7 @@ class FakeEnv:
         g[..., S["anchor_inside"]] = inside.float()
         g[..., S["obstacle_dist"]] = 10.0
         g[..., S["animal_dist"]] = 10.0
-        g[..., S["mate_dist"]] = 2 * self.arena_half
+        g[..., S["mate_dist"]] = spec.FAR_DIST
         if self.scene in ("trash", "world"):
             trash = torch.tensor([TYPE_INFO[t][4] for t in self.item_types])
             left = (trash & ~self.delivered[:, :self.n_items]).sum(-1).float() / trash.sum().clamp_min(1)

@@ -848,8 +848,12 @@ class SkyEnv:
         oob = ((self.pos[..., :2].abs() > self.arena_half + 5).any(-1) | (self.pos[..., 2] > ceiling)) & self.alive
         done = crash | oob.any(-1) | ~self.alive.any(-1)
         truncated = (self.steps >= self.episode_steps) & ~done
+        # which drones ended the episode (crashed or left the arena); their teammates' last
+        # transitions are cut off, not terminal. A world that ends otherwise marks every drone.
+        agent_done = (self.collided | oob) & done.unsqueeze(-1)
+        agent_done |= (done & ~agent_done.any(-1)).unsqueeze(-1)
         return StepOut(obs=self._obs(), done=done, truncated=truncated, events=events,
-                       info={"shield_count": self.shield_count.clone()})
+                       info={"shield_count": self.shield_count.clone(), "agent_done": agent_done})
 
     # ================================================================ dynamics
     def _held_mass(self) -> torch.Tensor:
@@ -1320,7 +1324,6 @@ class SkyEnv:
         dev = self.device
         g = torch.zeros(n, a, spec.G_DIM, device=dev)
         Sl = spec.G_SLICES
-        g[..., Sl["drone_pos"]] = self.pos
         g[..., Sl["drone_vel"]] = self.vel
         g[..., Sl["speed"]] = self.vel.norm(dim=-1, keepdim=True)
         g[..., Sl["tilt"]] = tilt_of(self.quat).unsqueeze(-1)
@@ -1352,10 +1355,10 @@ class SkyEnv:
             g[..., Sl["net_centroid_rel"]] = self.net.centroid().unsqueeze(1) - self.pos
             g[..., Sl["net_stretch"]] = self.net_stretch.view(n, 1, 1).expand(n, a, 1)
             g[..., Sl["fish_in_net"]] = self.fish_frac.view(n, 1, 1).expand(n, a, 1)
-            g[..., Sl["animal_dist"]] = self.animal_gap.view(n, 1, 1).expand(n, a, 1)
+            g[..., Sl["animal_dist"]] = self.animal_gap.clamp(max=spec.FAR_DIST).view(n, 1, 1).expand(n, a, 1)
             g[..., Sl["bycatch"]] = self.bycatch.float().view(n, 1, 1).expand(n, a, 1)
         else:
-            g[..., Sl["animal_dist"]] = 2 * self.arena_half
+            g[..., Sl["animal_dist"]] = spec.FAR_DIST
         g[..., Sl["payload_rel"]] = ppos - self.pos
         g[..., Sl["payload_vel"]] = pvel
         g[..., Sl["jerk"]] = self.jerk.unsqueeze(-1).clamp(max=500.0)
@@ -1378,14 +1381,15 @@ class SkyEnv:
         nvec = torch.gather(vec, 2, imin[..., None, None].expand(n, a, 1, 3)).squeeze(2)
         nrm = nvec / nvec.norm(dim=-1, keepdim=True).clamp_min(1e-6)
         bvel = torch.gather(ovel[:, None].expand(n, a, -1, 3), 2, imin[..., None, None].expand(n, a, 1, 3)).squeeze(2)
-        g[..., Sl["obstacle_dist"]] = dmin.clamp(max=2 * self.arena_half).unsqueeze(-1)
+        g[..., Sl["obstacle_dist"]] = dmin.clamp(max=spec.FAR_DIST).unsqueeze(-1)
         g[..., Sl["obstacle_closing"]] = (-((self.vel - bvel) * nrm).sum(-1)).unsqueeze(-1)
         if a > 1:
             dd = (self.pos[:, :, None] - self.pos[:, None]).norm(dim=-1)
             ok = self.alive[:, None] & ~torch.eye(a, dtype=torch.bool, device=dev)
-            g[..., Sl["mate_dist"]] = torch.where(ok, dd, torch.full_like(dd, 2 * self.arena_half)).min(-1).values.unsqueeze(-1)
+            g[..., Sl["mate_dist"]] = torch.where(ok, dd, torch.full_like(dd, spec.FAR_DIST)).min(-1).values.clamp(
+                max=spec.FAR_DIST).unsqueeze(-1)
         else:
-            g[..., Sl["mate_dist"]] = 2 * self.arena_half
+            g[..., Sl["mate_dist"]] = spec.FAR_DIST
         g[..., Sl["collision"]] = self.collided.float().unsqueeze(-1)
         g[..., Sl["shield"]] = self.shield_hit.float().unsqueeze(-1)
         return g

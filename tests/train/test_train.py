@@ -16,7 +16,7 @@ from skyhand.env.core import make_env
 from skyhand.train import nets
 from skyhand.train.agent import Agent
 from skyhand.train.buffer import DemoStore, ReplayBuffer, flatten_obs
-from skyhand.train.config import tiny_config
+from skyhand.train.config import Config, tiny_config
 from skyhand.train.fb_cpr import FBCPR, ortho_loss, penalties
 from skyhand.train.sf_fallback import PHI_DIM, Phi, SFLearner, regress_z
 from skyhand.train.zsample import WorldZ, ZSampler
@@ -534,3 +534,19 @@ def test_expert_bugs_are_not_swallowed(monkeypatch):
     env = make_env("trash", 1, lidar=False)
     with pytest.raises(AttributeError):
         try_expert(env)
+
+
+def test_buffer_stores_per_drone_done():
+    env = make_env("ocean", 2, lidar=False)
+    buf = ReplayBuffer(256, 16)
+    obs = env.reset()
+    a = torch.zeros(2, env.num_agents, 5)
+    out = env.step(a)
+    done = torch.zeros(2, env.num_agents, dtype=torch.bool)
+    done[0, 1] = True                                                    # drone 1 of world 0 crashed
+    buf.add(obs, a, out.obs, done, done.any(-1), nets.sphere(torch.randn(2, 16)))
+    assert buf.done[:2 * env.num_agents].tolist() == done.reshape(-1).tolist()
+
+
+def test_default_discount_covers_long_legs():
+    assert Config().gamma >= 0.995

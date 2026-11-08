@@ -132,7 +132,7 @@ const merged = BufferGeometryUtils.mergeGeometries(parts); // inputs need matchi
 scene.add(new THREE.Mesh(merged, new THREE.MeshNormalMaterial())); // 200 rocks, one call — but one bounding sphere for all of them
 ```
 
-Merging trades culling granularity for the call count: the merged mesh has a single bounding sphere, so frustum culling is all-or-nothing. Keep world-sized clusters merged per cluster, not one merge for a whole level.
+Merging trades culling granularity for the call count: the merged mesh has a single bounding sphere, so frustum culling is all-or-nothing. Keep world-sized groups merged per group, not one merge for a whole level.
 
 **Instance repeats.** One geometry drawn many times with per-instance transforms stays one call:
 

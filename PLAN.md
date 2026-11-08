@@ -42,7 +42,7 @@ All of these are **off-policy**: F, B, and the actor learn from a replay buffer 
 - **Training needs only torch and numpy.** The whole training path imports only torch and numpy, targets Python 3.9+ and PyTorch 2.0+, and is tested with Genesis, Gemini, and the web stack blocked (tests/test_minimal_deps.py).
 - **Simplified grasp.** Closing the gripper near a handle at low speed welds it to the gripper. Standard in RL, stated on Devpost.
 - **LiDAR and water.** Ordinary near-infrared LiDAR mostly reflects off water. Bathymetric LiDAR uses green 532 nm light and reaches a few meters in clear water, but is heavy and expensive today. We simulate a dual-wavelength unit with randomized turbidity and say so openly.
-- **Horizon is no longer a problem.** Both scenes are about 30 m across, which the policy covers within its few-second lookahead at γ = 0.99 and 20 Hz. No route planner is needed.
+- **Horizon.** Trash and ocean are about 30 m across, well inside the lookahead. Delivery and world legs take 17 to 40 s, so γ is 0.995 (about 10 s at 20 Hz) and the compiled rewards keep dense distance terms for the rest. No route planner is needed.
 - **What "general" means.** Any reward written over the goal-space variables in section 6 becomes a z with no retraining. FB only captures the part of a reward that correlates with B, and behaviors the replay buffer never covered will not appear.
 
 ## 4. Architecture
@@ -157,11 +157,11 @@ acts = env.expert_action()            # scripted expert
 ## 6. Goal space g and the reward language
 
 ### 6.1 Goal space g (input to B, the discriminator, and reward programs)
-B sees only the reward-relevant part of the state, as the FB paper recommends. F and the actor see everything. All positions are relative to the drone or to anchors.
+B sees only the reward-relevant part of the state, as the FB paper recommends. F and the actor see everything. All positions are relative to the drone or to anchors; g has no absolute world position, since layouts are random. Networks see g divided by fixed per-field scales, with the long relative vectors (anchors, payload, net centroid) compressed to log1p of their scaled length so a 700 m delivery leg stays in range. Distance fields (obstacle, teammate, animal) are capped at one 50 m constant in every scene, which is also their value when there is nothing to measure.
 
 | Group | Variables |
 |---|---|
-| Drone | position, velocity, speed, tilt, height above ground or waves, thrust use |
+| Drone | velocity, speed, tilt, height above ground or waves, thrust use |
 | Gripper | closed, holding, held mass |
 | Payload | position, velocity, swing rate, jerk |
 | Anchors 0 to 3 | position relative to drone, position relative to payload, inside-zone flag |
@@ -227,12 +227,13 @@ Critics see privileged state and the actor sees LiDAR, as in BFM-Zero. Cut line:
 - Demonstrations: the expert demo env keeps running between collections (the first collection is a full episode), so demo segments cover grasping and carrying, not only the approach.
 - Each loop: one env step for all worlds, then G gradient steps on batch b. Start with G = 2 and b = 4096.
 - Train one model on both scenes by splitting worlds between them, so a single z space covers trash, organ, and fishing.
+- Termination is per drone: when one drone crashes or leaves the arena, only its transition is terminal. Its teammates' last transitions are cut off (bootstrapped), since they did nothing wrong.
 
 ### 7.4 Starting hyperparameters
 | Setting | Value | Source |
 |---|---|---|
 | d (z dimension) | 256 | BFM-Zero ablation |
-| γ | 0.99 at 20 Hz | Section 3 |
+| γ | 0.995 at 20 Hz | Section 3 |
 | Optimizer | Adam | All FB papers |
 | lr F, actor, Q_D, Q_R | 1e-4 | Touati 2023, Motivo |
 | lr B, D | 1e-5 | Motivo, BFM-Zero |

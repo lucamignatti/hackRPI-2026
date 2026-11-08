@@ -128,9 +128,11 @@ PRIV_DIM = 3 + 3 + 3 + len(PRIV_TYPES)   # rel pos, vel, size, type one-hot
 
 # ---------------------------------------------------------------- goal space g
 # Ordered (name, size, scale). B, the discriminator, and reward programs read g.
-# scale is a fixed normaliser: networks see g / scale. Reward programs see raw g.
+# Networks see g_normalize(g): g / scale, with the long relative vectors compressed
+# (see G_VEC3_FIELDS). Reward programs see raw g. g holds no absolute world position:
+# layouts are random, so only relative geometry carries meaning across worlds.
+FAR_DIST = 50.0   # m, cap for the distance fields (and their value when nothing is there), same in every scene
 _G_FIELDS = [
-    ("drone_pos", 3, 25.0),        # world position
     ("drone_vel", 3, 6.0),
     ("speed", 1, 6.0),
     ("tilt", 1, 1.0),              # rad
@@ -153,15 +155,15 @@ _G_FIELDS = [
     ("anchor_inside", N_ANCHORS, 1.0),            # drone inside anchor k zone
     ("anchor_active", N_ANCHORS, 1.0),            # 1 if anchor k is in use (an unused or unmatched slot reads
                                                   # as zero offsets, indistinguishable from an anchor at the drone)
-    ("obstacle_dist", 1, 10.0),    # distance from drone surface to nearest obstacle
+    ("obstacle_dist", 1, 10.0),    # distance from drone surface to nearest obstacle (capped at FAR_DIST)
     ("obstacle_closing", 1, 6.0),  # closing speed toward it (positive = approaching)
     ("trash_left", 1, 1.0),        # fraction of this world's trash not yet delivered (trash scene)
     ("net_centroid_rel", 3, 25.0), # net centroid minus drone position (zeros outside ocean)
     ("net_stretch", 1, 1.0),       # max edge stretch ratio minus 1
     ("fish_in_net", 1, 1.0),       # fraction of fish inside the net volume
-    ("animal_dist", 1, 10.0),      # nearest marine animal to any net node (ocean; large elsewhere)
+    ("animal_dist", 1, 10.0),      # nearest marine animal to any net node, capped at FAR_DIST (FAR_DIST: no net)
     ("bycatch", 1, 1.0),           # 1 while an animal is tangled in the net
-    ("mate_dist", 1, 10.0),        # nearest teammate distance (ARENA_HALF*2 if none)
+    ("mate_dist", 1, 10.0),        # nearest teammate distance, capped at FAR_DIST (FAR_DIST: no teammate)
     ("collision", 1, 1.0),         # 1 on a step with a collision
     ("shield", 1, 1.0),            # 1 on a step where the shield intervened
 ]
@@ -178,6 +180,34 @@ def g_scale(device=None) -> torch.Tensor:
     """Per-dimension normaliser for g, shape [G_DIM]."""
     parts = [torch.full((s,), float(c)) for _, s, c in _G_FIELDS]
     return torch.cat(parts).to(device)
+
+
+# relative position vectors that span a whole arena (up to ~700 m in delivery): networks see
+# them with the norm compressed, v_n * log1p(|v_n|) / |v_n| for v_n = v / scale, which keeps the
+# direction, is ~identity within one scale length and grows only logarithmically beyond it
+G_VEC3_FIELDS = ("payload_rel", "anchor_rel_drone", "anchor_rel_payload", "net_centroid_rel")
+
+
+def _vec3_mask() -> torch.Tensor:
+    m = torch.zeros(G_DIM, dtype=torch.bool)
+    for name in G_VEC3_FIELDS:
+        m[G_SLICES[name]] = True
+    return m
+
+
+G_VEC3_MASK = _vec3_mask()
+
+
+def g_normalize(g: torch.Tensor, scale: Optional[torch.Tensor] = None) -> torch.Tensor:
+    """Network input for g [..., G_DIM]: g / scale with G_VEC3_FIELDS norm-compressed."""
+    x = g / (g_scale(g.device) if scale is None else scale)
+    mask = G_VEC3_MASK.to(g.device)
+    v = x[..., mask].unflatten(-1, (-1, 3))
+    n = v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
+    v = v * (torch.log1p(n) / n)                                       # -> 1 as n -> 0
+    out = x.clone()
+    out[..., mask] = v.flatten(-2)
+    return out
 
 
 def g_field(g: torch.Tensor, name: str) -> torch.Tensor:
@@ -235,7 +265,7 @@ class StepOut:
     done: torch.Tensor                    # [N] bool, terminal (crash, out of bounds)
     truncated: torch.Tensor               # [N] bool, time limit
     events: Dict[str, torch.Tensor]       # EVENT_KEYS -> [N, A] bool
-    info: Dict[str, object] = field(default_factory=dict)
+    info: Dict[str, object] = field(default_factory=dict)   # "agent_done" [N, A] bool: drones that ended it
 
 
 # ---------------------------------------------------------------- anchor binding

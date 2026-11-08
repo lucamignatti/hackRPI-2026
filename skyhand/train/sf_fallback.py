@@ -18,7 +18,7 @@ from .config import Config
 from .fb_cpr import FBCPR
 
 K = spec.N_ANCHORS
-PHI_DIM = spec.G_DIM + (2 * K + 1) * 2 + K + 1     # 59 + 18 + 4 + 1 = 82
+PHI_DIM = spec.G_DIM + (2 * K + 1) * 2 + K + 1     # G_DIM + 18 + 4 + 1
 
 
 class Phi(nn.Module):
@@ -31,7 +31,7 @@ class Phi(nn.Module):
         self.d = PHI_DIM
 
     def forward(self, g: torch.Tensor) -> torch.Tensor:
-        gn = (g / self.scale).clamp(-5.0, 5.0)
+        gn = spec.g_normalize(g, self.scale).clamp(-5.0, 5.0)
         ad = spec.g_field(g, "anchor_rel_drone").unflatten(-1, (K, 3)).norm(dim=-1)       # [..., K]
         ap = spec.g_field(g, "anchor_rel_payload").unflatten(-1, (K, 3)).norm(dim=-1)     # [..., K]
         pd = spec.g_field(g, "payload_rel").norm(dim=-1, keepdim=True)                    # [..., 1]

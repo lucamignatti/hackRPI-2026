@@ -79,8 +79,9 @@ class ReplayBuffer:
     def add(self, obs: Dict[str, torch.Tensor], action: torch.Tensor, next_obs: Dict[str, torch.Tensor],
             done: torch.Tensor, reset: torch.Tensor, z: torch.Tensor,
             world_offset: int = 0, stream: object = 0, expert: Optional[torch.Tensor] = None) -> None:
-        """obs/next_obs: [N, A, ...] dicts; action [N, A, 5]; done, reset [N] bool
-        (done masks the bootstrap; reset = done | truncated, worlds reset after this call);
+        """obs/next_obs: [N, A, ...] dicts; action [N, A, 5]; done [N] or per drone [N, A] bool
+        (masks the bootstrap: only the drone that crashed is terminal, its teammates are cut off);
+        reset [N] bool (done | truncated, worlds reset after this call);
         z [N, d] (team z) or [N, A, d]; expert [N] bool, True where the scripted expert acted."""
         n, a = action.shape[:2]
         m = n * a
@@ -107,7 +108,8 @@ class ReplayBuffer:
         self.obs_idx[t], self.obs_g[t] = rows, gens
         self.next_idx[t], self.next_g[t] = nrows, ngens
         self.action[t] = action.reshape(m, -1).to(dev).float()
-        self.done[t] = done.to(dev).bool().reshape(n, 1).expand(n, a).reshape(m)
+        done = done.to(dev).bool()
+        self.done[t] = (done if done.dim() == 2 else done.reshape(n, 1).expand(n, a)).reshape(m)
         if z.dim() == 2:
             z = z.unsqueeze(1).expand(n, a, z.shape[-1])
         self.z[t] = z.reshape(m, -1).to(dev).half()

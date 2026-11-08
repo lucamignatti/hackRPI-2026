@@ -77,9 +77,10 @@ SCALARS: "Dict[str, tuple]" = {
     "net_stretch": (_field1("net_stretch"), "max net edge stretch ratio minus 1 (ocean)"),
     "fish_in_net": (_field1("fish_in_net"), "fraction of fish inside the net (ocean, 0-1)"),
     "animal_dist": (_field1("animal_dist"), "distance from the nearest marine animal to the net (m, ocean; "
-                                            "large elsewhere)"),
+                                            f"capped at {spec.FAR_DIST:g}, {spec.FAR_DIST:g} without a net)"),
     "bycatch": (_field1("bycatch"), "1 while a marine animal is tangled in the net (ocean)"),
-    "mate_dist": (_field1("mate_dist"), "distance to nearest teammate drone (m)"),
+    "mate_dist": (_field1("mate_dist"), f"distance to nearest teammate drone (m, capped at {spec.FAR_DIST:g}, "
+                                        f"{spec.FAR_DIST:g} without teammates)"),
     "collision": (_field1("collision"), "1 on a step with a collision"),
     "shield": (_field1("shield"), "1 on a step where the safety shield intervened"),
     "vx": (_comp("drone_vel", 0), "drone velocity x (m/s)"),
