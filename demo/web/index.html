@@ -28,6 +28,7 @@
         </div>
         <div id="message" class="hud-msg">Connecting to the simulator...</div>
         <div class="gauges">
+          <div class="gauge hidden" id="g-stage-box"><label>stage</label><span id="g-stage">-</span></div>
           <div class="gauge"><label>reward</label><span id="g-reward">-</span></div>
           <div class="gauge"><label>speed</label><span id="g-speed">-</span></div>
           <div class="gauge"><label>swing</label><span id="g-swing">-</span></div>
@@ -81,6 +82,7 @@
         <ul id="card-expl"></ul>
         <div id="card-anchors"></div>
         <div id="card-agents" class="hidden"></div>
+        <div id="card-segments" class="hidden"></div>
         <details>
           <summary>Reward program</summary>
           <code id="card-reward"></code>
