@@ -1299,6 +1299,12 @@ function applyDemo(d) {
       stageBox.classList.add("hidden");
     }
   }
+  if (d.flying && typeof d.segment_idx === "number" && currentSegments && currentSegments.length && $("stage-cur-label")) {
+    if (viewStageIdx !== d.segment_idx) {
+      viewStageIdx = d.segment_idx;
+      renderStageView();
+    }
+  }
   $("g-reward").textContent = fmt(d.reward);
   $("g-swing").textContent = fmt(d.swing) + " rad/s";
   $("g-speed").textContent = fmt(d.speed, 1) + (maxSpeed ? " / " + maxSpeed.toFixed(0) : "") + " m/s";
@@ -1412,6 +1418,32 @@ for (const b of document.querySelectorAll("#scene-toggle button")) {
 }
 
 function hideCard() { $("card").classList.add("hidden"); }
+let viewStageIdx = 0;
+let currentSegments = [];
+
+function renderStageView() {
+  if (!currentSegments || !currentSegments.length) return;
+  const seg = currentSegments[viewStageIdx];
+  if (!seg) return;
+
+  const lbl = $("stage-cur-label");
+  const bdg = $("stage-cur-badge");
+  const gol = $("stage-goal");
+  const rwd = $("stage-reward-code");
+  const dne = $("stage-done-code");
+  const prv = $("stage-prev");
+  const nxt = $("stage-next");
+
+  if (lbl) lbl.textContent = `Stage ${viewStageIdx + 1} of ${currentSegments.length}`;
+  if (bdg) bdg.textContent = `z vector #${viewStageIdx + 1}`;
+  if (gol) gol.textContent = seg.text || `Goal for stage ${viewStageIdx + 1}`;
+  if (rwd) rwd.textContent = seg.reward || "(none)";
+  if (dne) dne.textContent = seg.done_when || "(none / flies until stopped)";
+
+  if (prv) prv.disabled = viewStageIdx <= 0;
+  if (nxt) nxt.disabled = viewStageIdx >= currentSegments.length - 1;
+}
+
 function showCard(m) {
   $("card").classList.remove("hidden");
   const src = $("card-source");
@@ -1454,59 +1486,48 @@ function showCard(m) {
     segs.innerHTML = "";
     segs.classList.toggle("hidden", !hasSegs);
     if (hasSegs) {
-      const h = document.createElement("div");
-      h.style.fontWeight = "600";
-      h.style.fontSize = "12px";
-      h.style.color = "var(--muted)";
-      h.style.textTransform = "uppercase";
-      h.style.letterSpacing = "0.05em";
-      h.style.margin = "8px 0 4px";
-      h.textContent = `Stages (${m.segments.length})`;
-      segs.appendChild(h);
+      currentSegments = m.segments;
+      viewStageIdx = 0;
 
-      for (const seg of m.segments) {
-        const item = document.createElement("div");
-        item.className = "stage-item";
-        item.id = `stage-card-${seg.index}`;
+      segs.innerHTML = `
+        <div class="stage-carousel">
+          <div class="stage-nav">
+            <button id="stage-prev" type="button" class="stage-arrow-btn" title="Previous stage">&#9664;</button>
+            <div class="stage-nav-title">
+              <span class="stage-label" id="stage-cur-label">Stage 1 of ${m.segments.length}</span>
+              <span class="stage-badge" id="stage-cur-badge">z vector #1</span>
+            </div>
+            <button id="stage-next" type="button" class="stage-arrow-btn" title="Next stage">&#9654;</button>
+          </div>
+          <div class="stage-body">
+            <div class="stage-goal-text" id="stage-goal"></div>
+            <div class="stage-field-label">Reward function</div>
+            <code id="stage-reward-code"></code>
+            <div class="stage-field-label">Stop condition</div>
+            <code class="detector" id="stage-done-code"></code>
+          </div>
+        </div>
+      `;
 
-        const top = document.createElement("div");
-        top.className = "stage-item-top";
-
-        const num = document.createElement("span");
-        num.className = "stage-item-num";
-        num.textContent = `Stage ${seg.index + 1}:`;
-        top.appendChild(num);
-
-        const title = document.createElement("span");
-        title.className = "stage-item-text";
-        title.textContent = seg.text || "";
-        top.appendChild(title);
-
-        item.appendChild(top);
-
-        const codeLine = document.createElement("div");
-        codeLine.className = "stage-item-code";
-
-        const rSpan = document.createElement("span");
-        rSpan.className = "r-val";
-        rSpan.title = seg.reward;
-        rSpan.textContent = `r: ${seg.reward}`;
-        codeLine.appendChild(rSpan);
-
-        if (seg.done_when) {
-          const dSpan = document.createElement("span");
-          dSpan.className = "done";
-          dSpan.textContent = `done: ${seg.done_when}`;
-          codeLine.appendChild(dSpan);
+      $("stage-prev").onclick = () => {
+        if (viewStageIdx > 0) {
+          viewStageIdx--;
+          renderStageView();
         }
+      };
 
-        item.appendChild(codeLine);
-        segs.appendChild(item);
-      }
+      $("stage-next").onclick = () => {
+        if (viewStageIdx < currentSegments.length - 1) {
+          viewStageIdx++;
+          renderStageView();
+        }
+      };
+
+      renderStageView();
     }
   }
 
-  // When stages exist, hide redundant outer anchors and details dropdown to avoid bloat
+    // When stages exist, hide redundant outer anchors and details dropdown to avoid bloat
   const cardAnchors = $("card-anchors");
   if (cardAnchors) cardAnchors.classList.toggle("hidden", hasSegs);
   const cardDetails = $("card").querySelector("details");

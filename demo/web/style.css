@@ -132,82 +132,94 @@ body:not(.has-lake) .lake-only { display: none; }
 #card-agents .sub { color: var(--muted); margin: 2px 0; }
 #card-agents code { margin-top: 3px; }
 
-/* Multi-stage mission segments */
-#card-segments { margin: 8px 0; }
-.stage-item {
-  position: relative;
-  font-size: 12px;
-  padding: 8px 10px;
-  margin: 6px 0;
-  border-radius: 7px;
-  background: rgba(10, 14, 20, 0.55);
+/* Stage carousel with arrows */
+#card-segments { margin: 10px 0; }
+.stage-carousel {
+  background: rgba(10, 14, 20, 0.65);
   border: 1px solid #232f3e;
-  transition: all 0.2s ease;
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
-.stage-item:hover {
-  border-color: #38495f;
-  background: rgba(10, 14, 20, 0.75);
-}
-.stage-item.active {
-  border-color: #58a6ff;
-  background: rgba(56, 139, 253, 0.08);
-  box-shadow: 0 0 10px rgba(56, 139, 253, 0.25);
-}
-.stage-item-top {
+.stage-nav {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  border-bottom: 1px solid #1c2633;
+  padding-bottom: 6px;
+}
+.stage-nav-title {
+  display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 5px;
 }
-.stage-item-num {
+.stage-label {
   font-weight: 700;
-  color: #58a6ff;
-  font-size: 10px;
+  font-size: 13px;
+  color: var(--accent);
   text-transform: uppercase;
-  background: rgba(56, 139, 253, 0.12);
-  border: 1px solid rgba(56, 139, 253, 0.25);
-  padding: 1px 6px;
-  border-radius: 4px;
   letter-spacing: 0.04em;
-  white-space: nowrap;
 }
-.stage-item-text {
-  font-weight: 500;
-  color: #e2e8f0;
-  font-size: 12px;
-  flex: 1;
-  line-height: 1.3;
-}
-.stage-item-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  color: #93c5fd;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  background: #090d13;
-  padding: 4px 8px;
-  border-radius: 5px;
-  border: 1px solid #1a222e;
-}
-.stage-item-code .r-val {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 175px;
-}
-.stage-item-code span.done {
-  color: #4ade80;
-  background: rgba(74, 222, 128, 0.1);
-  border: 1px solid rgba(74, 222, 128, 0.25);
-  padding: 1px 6px;
-  border-radius: 4px;
-  font-size: 10px;
+.stage-badge {
+  font-size: 10.5px;
   font-weight: 600;
-  white-space: nowrap;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(56, 139, 253, 0.15);
+  border: 1px solid rgba(56, 139, 253, 0.3);
+  color: #a5d6ff;
+}
+.stage-arrow-btn {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+.stage-arrow-btn:hover:not(:disabled) {
+  background: #233144;
+  border-color: var(--accent);
+  color: #fff;
+}
+.stage-arrow-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.stage-goal-text {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #e6edf3;
+  margin: 6px 0 8px;
+  line-height: 1.4;
+}
+.stage-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-top: 8px;
+  margin-bottom: 3px;
+}
+.stage-carousel code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  margin: 2px 0 6px;
+  padding: 6px 8px;
+  background: #090d13;
+  border: 1px solid #1a222e;
+  border-radius: 5px;
+  color: #93c5fd;
+}
+.stage-carousel code.detector {
+  color: #7ee787;
+  background: rgba(46, 160, 67, 0.1);
+  border-color: rgba(46, 160, 67, 0.3);
 }
 
 button.go {
