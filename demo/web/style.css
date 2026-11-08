@@ -32,6 +32,14 @@ button.toggle.on { background: var(--warn); color: #1d1300; border-color: var(--
 .seg button.active { background: var(--accent); color: #04121f; border-color: var(--accent); font-weight: 600; }
 textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 7px;
   padding: 8px; font: inherit; resize: vertical; }
+.mission-actions { display: grid; grid-template-columns: auto 1fr; gap: 8px; margin-top: 6px; }
+.mission-actions button.primary { width: auto; margin-top: 0; }
+#btn-voice { min-width: 94px; }
+#btn-voice.recording { background: #4a1820; border-color: var(--bad); color: #ffb3ba; }
+#btn-voice.recording::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 6px;
+  border-radius: 50%; background: var(--bad); box-shadow: 0 0 0 3px rgba(255,93,108,.18); }
+#voice-status.error { color: var(--bad); }
+#voice-status.success { color: var(--go); }
 .examples { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
 .examples span { font-size: 12px; color: var(--accent); background: #0f2033; border-radius: 10px; padding: 2px 8px; cursor: pointer; }
 #card {

@@ -145,10 +145,37 @@ def test_health(client):
 def test_index_and_static(client):
     r = client.get("/")
     assert r.status_code == 200 and "importmap" in r.text
+    assert 'id="btn-voice"' in r.text and 'id="voice-status"' in r.text
     for sc in spec.SCENES:
         assert f'data-scene="{sc}"' in r.text
-    assert client.get("/static/main.js").status_code == 200
+    js = client.get("/static/main.js")
+    assert js.status_code == 200 and "MediaRecorder" in js.text and 'fetch("/api/transcribe"' in js.text
     assert client.get("/static/style.css").status_code == 200
+
+
+def test_voice_transcription_requires_server_key(client, monkeypatch):
+    monkeypatch.delenv("ELEVENLABS_API_KEY", raising=False)
+    r = client.post("/api/transcribe", content=b"recording", headers={"content-type": "audio/webm"})
+    assert r.status_code == 503 and "ELEVENLABS_API_KEY" in r.json()["detail"]
+
+
+def test_voice_transcription_returns_reviewable_text(client, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+
+    async def fake_transcribe(audio, content_type):
+        assert audio == b"recording" and content_type == "audio/webm"
+        return {"text": "fly to the clinic", "language": "en", "provider": "ElevenLabs", "model": "scribe_v2"}
+
+    monkeypatch.setattr("demo.server.transcribe_elevenlabs", fake_transcribe)
+    r = client.post("/api/transcribe", content=b"recording", headers={"content-type": "audio/webm"})
+    assert r.status_code == 200
+    assert r.json() == {"text": "fly to the clinic", "language": "en", "provider": "ElevenLabs", "model": "scribe_v2"}
+
+
+def test_voice_transcription_rejects_non_audio(client, monkeypatch):
+    monkeypatch.setenv("ELEVENLABS_API_KEY", "test-key")
+    r = client.post("/api/transcribe", content=b"not audio", headers={"content-type": "text/plain"})
+    assert r.status_code == 415
 
 
 def test_scene_switch(client):

@@ -74,7 +74,11 @@
         <h2>2. Mission</h2>
         <textarea id="mission-text" rows="3" placeholder="e.g. pick up the trash bag and put it in the bin without hitting the cars"></textarea>
         <div class="examples" id="examples"></div>
-        <button id="btn-compile" class="primary">Compile</button>
+        <div class="mission-actions">
+          <button id="btn-voice" type="button" title="Record a mission with ElevenLabs speech to text" aria-pressed="false">🎙 Speak</button>
+          <button id="btn-compile" class="primary">Compile</button>
+        </div>
+        <div id="voice-status" class="note hidden" role="status" aria-live="polite"></div>
       </section>
 
       <section id="card" class="hidden">

@@ -1421,6 +1421,105 @@ function hideCard() { $("card").classList.add("hidden"); }
 let viewStageIdx = 0;
 let currentSegments = [];
 
+// Push-to-talk fills the same reviewable text field as typing; it never compiles or flies automatically.
+const voiceButton = $("btn-voice");
+const voiceStatus = $("voice-status");
+const voiceMimeTypes = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/mp4"];
+let voiceRecorder = null, voiceStream = null, voiceStopTimer = null, voiceChunks = [];
+
+function setVoiceStatus(message, kind = "") {
+  voiceStatus.textContent = message;
+  voiceStatus.className = "note" + (kind ? " " + kind : "") + (message ? "" : " hidden");
+}
+
+function releaseVoiceStream() {
+  if (voiceStream) for (const track of voiceStream.getTracks()) track.stop();
+  voiceStream = null;
+}
+
+function resetVoiceButton() {
+  voiceButton.disabled = false;
+  voiceButton.classList.remove("recording");
+  voiceButton.setAttribute("aria-pressed", "false");
+  voiceButton.textContent = "🎙 Speak";
+}
+
+async function uploadVoiceRecording(blob) {
+  const response = await fetch("/api/transcribe", {
+    method: "POST",
+    headers: { "Content-Type": blob.type || "audio/webm" },
+    body: blob,
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.detail || response.statusText);
+  if (!result.text) throw new Error("No speech was detected.");
+  $("mission-text").value = result.text;
+  $("mission-text").focus();
+  setVoiceStatus(`Transcribed${result.language ? " (" + result.language + ")" : ""}. Review the mission, then Compile.`, "success");
+  toast("Voice mission ready for review.");
+}
+
+async function startVoiceRecording() {
+  try {
+    voiceStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = voiceMimeTypes.find((type) => MediaRecorder.isTypeSupported(type)) || "";
+    voiceChunks = [];
+    voiceRecorder = new MediaRecorder(voiceStream, mimeType ? { mimeType } : undefined);
+    voiceRecorder.ondataavailable = (event) => { if (event.data.size) voiceChunks.push(event.data); };
+    voiceRecorder.onerror = () => {
+      clearTimeout(voiceStopTimer);
+      releaseVoiceStream();
+      resetVoiceButton();
+      setVoiceStatus("Microphone recording failed. You can still type the mission.", "error");
+    };
+    voiceRecorder.onstop = async () => {
+      clearTimeout(voiceStopTimer);
+      const type = voiceRecorder.mimeType || mimeType || "audio/webm";
+      const blob = new Blob(voiceChunks, { type });
+      voiceRecorder = null;
+      voiceChunks = [];
+      releaseVoiceStream();
+      voiceButton.disabled = true;
+      voiceButton.classList.remove("recording");
+      voiceButton.setAttribute("aria-pressed", "false");
+      voiceButton.textContent = "Transcribing…";
+      setVoiceStatus("Sending the recording to ElevenLabs…");
+      try { await uploadVoiceRecording(blob); }
+      catch (error) {
+        setVoiceStatus("Voice input failed: " + error.message, "error");
+        toast("Voice input failed: " + error.message);
+      }
+      resetVoiceButton();
+    };
+    voiceRecorder.start();
+    voiceButton.classList.add("recording");
+    voiceButton.setAttribute("aria-pressed", "true");
+    voiceButton.textContent = "Stop";
+    setVoiceStatus("Listening… Speak the drone mission, then press Stop.");
+    voiceStopTimer = setTimeout(() => {
+      if (voiceRecorder && voiceRecorder.state === "recording") voiceRecorder.stop();
+    }, 30000);
+  } catch (error) {
+    releaseVoiceStream();
+    resetVoiceButton();
+    const denied = error && (error.name === "NotAllowedError" || error.name === "SecurityError");
+    setVoiceStatus(denied ? "Microphone permission was denied. You can still type the mission."
+      : "Could not start the microphone: " + error.message, "error");
+  }
+}
+
+const voiceSupported = window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder;
+if (!voiceSupported) {
+  voiceButton.disabled = true;
+  setVoiceStatus(window.isSecureContext ? "Voice input is not supported by this browser."
+    : "Voice input requires HTTPS or localhost; typed missions still work.", "error");
+} else {
+  voiceButton.onclick = () => {
+    if (voiceRecorder && voiceRecorder.state === "recording") voiceRecorder.stop();
+    else if (!voiceButton.disabled) startVoiceRecording();
+  };
+}
+
 function renderStageView() {
   if (!currentSegments || !currentSegments.length) return;
   const seg = currentSegments[viewStageIdx];

@@ -30,6 +30,10 @@ Flags:
 | `--seed N` | fixed world layout |
 
 Set `GEMINI_API_KEY` to compile missions with Gemini. Without it, the mission package's offline parser is used.
+Set `ELEVENLABS_API_KEY` to enable the optional **Speak** button, which records one mission (up to 30 seconds),
+transcribes it with ElevenLabs Scribe v2, and puts the text in the mission box for review. Voice input never
+auto-compiles or starts a flight. Browser microphone access requires `localhost` or HTTPS; a judging laptop
+opening plain `http://<desktop-ip>:8000` will retain typed input but its browser will disable the microphone.
 
 ## What judges do
 
@@ -55,7 +59,8 @@ Set `GEMINI_API_KEY` to compile missions with Gemini. Without it, the mission pa
      other drones collect trash"; one shared carry text sends every drone to a different item). The card lists
      each drone's anchors and reward; the mission succeeds when every drone with a goal has met its own done
      condition, and a drone that is done holds position. "Net the fish ..." uses the drones on the net.
-2. **Mission**: type anything, or click an example, then **Compile**. The card shows the anchors
+2. **Mission**: type anything, click an example, or press **Speak** and dictate a command, then **Compile**.
+   Voice transcription fills the same editable text box so the operator can correct it before compilation. The card shows the anchors
    (a0..a3, with the entity each one is bound to), the plain-language explanation, the raw reward
    program and the done condition. Nothing flies yet.
 3. **Approve & fly** (or **Cancel**). This is the human-in-the-loop step. With a checkpoint, z is computed
@@ -126,7 +131,7 @@ The top bar always shows which mode is running, so the demo never misrepresents 
 
 API: `GET /` · `GET /api/health` · `GET /api/state` (one frame, terrain heights included) · `GET /api/info` ·
 `GET /api/terrain` (current heightfield) · `GET /api/zmap` ·
-`POST /api/scene {scene}` · `POST /api/mission {text}` · `POST /api/approve` · `POST /api/cancel` ·
+`POST /api/scene {scene}` · `POST /api/mission {text}` · `POST /api/transcribe` (raw audio body) · `POST /api/approve` · `POST /api/cancel` ·
 `POST /api/stop` · `POST /api/reset` · `POST /api/perturb {kind, ...}` with kinds `drop_obstacle {pos}`,
 `gust {vec, duration}`, `waves {scale}`, `tide {offset}`, `move_payload {pos, item?}`, `disable_drone {agent}` · `WS /ws`
 (messages: `hello` (info), `terrain` (full heightfield, once on connect), then
@@ -148,4 +153,6 @@ skip a scene whose `make_env` fails or builds a world outside the arena.
 - **Checkpoint did not load**: the log says why and the top bar shows `scripted fallback`. Check the path and that
   `skyhand.train` imports.
 - **Compiler shows `offline parser` although you set a key**: the note under the card gives Gemini's error.
+- **Speak button disabled**: microphone capture requires `localhost` or HTTPS. Also set `ELEVENLABS_API_KEY`
+  on the demo server; the key is never sent to the browser.
 - **Mission does something odd**: read the reward card before approving, Cancel and rephrase.

@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -21,8 +22,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+import httpx
 import torch
-from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -40,6 +42,56 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 PERTURB_KINDS = ("drop_obstacle", "gust", "waves", "move_payload", "disable_drone", "tide")
 SIM_REAL = "simulator"
 SIM_FAKE = "kinematic preview"
+ELEVENLABS_STT_URL = "https://api.elevenlabs.io/v1/speech-to-text"
+MAX_VOICE_BYTES = 10 * 1024 * 1024
+VOICE_TYPES = {
+    "audio/webm": "webm",
+    "audio/ogg": "ogg",
+    "audio/mp4": "m4a",
+    "audio/mpeg": "mp3",
+    "audio/wav": "wav",
+    "audio/x-wav": "wav",
+    "audio/x-m4a": "m4a",
+}
+
+
+async def transcribe_elevenlabs(audio: bytes, content_type: str) -> dict:
+    """Send one push-to-talk recording to Scribe v2; the API key never reaches the browser."""
+    api_key = os.environ.get("ELEVENLABS_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("ELEVENLABS_API_KEY is not configured")
+    mime = content_type.split(";", 1)[0].strip().lower()
+    extension = VOICE_TYPES.get(mime)
+    if extension is None:
+        raise ValueError(f"unsupported audio type: {mime or 'missing'}")
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            response = await client.post(
+                ELEVENLABS_STT_URL,
+                headers={"xi-api-key": api_key},
+                data={"model_id": "scribe_v2", "tag_audio_events": "false"},
+                files={"file": (f"mission.{extension}", audio, mime)},
+            )
+    except httpx.RequestError as exc:
+        raise RuntimeError("could not reach ElevenLabs") from exc
+    if response.is_error:
+        try:
+            payload = response.json()
+            detail = payload.get("detail") or payload.get("message")
+        except (ValueError, AttributeError):
+            detail = response.text
+        detail = str(detail or response.reason_phrase)[:300]
+        raise RuntimeError(f"ElevenLabs transcription failed ({response.status_code}): {detail}")
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise RuntimeError("ElevenLabs returned an invalid response") from exc
+    text = str(result.get("text", "")).strip()
+    if not text:
+        raise RuntimeError("ElevenLabs returned an empty transcript")
+    # A stable response shape keeps provider details out of the mission compiler.
+    return {"text": text, "language": result.get("language_code"),
+            "provider": "ElevenLabs", "model": "scribe_v2"}
 
 
 def default_make_env(backend: str = "torch", device: str = "cpu", lidar: bool = True, fake: bool = False, **env_kw):
@@ -615,6 +667,32 @@ def create_app(session: Optional[DemoSession] = None, speed: float = 1.0, max_fp
     @app.post("/api/mission")
     async def mission(body: Dict[str, Any] = Body(...)):
         return await run(S().compile, str(body.get("text", "")))
+
+    @app.post("/api/transcribe")
+    async def transcribe(request: Request):
+        """Accept a raw browser recording and return reviewable text; never auto-compile it."""
+        if not os.environ.get("ELEVENLABS_API_KEY", "").strip():
+            raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY is not configured")
+        try:
+            declared = int(request.headers.get("content-length", "0"))
+        except ValueError:
+            declared = 0
+        if declared > MAX_VOICE_BYTES:
+            raise HTTPException(status_code=413, detail="voice recording is too large")
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type not in VOICE_TYPES:
+            raise HTTPException(status_code=415, detail=f"unsupported audio type: {content_type or 'missing'}")
+        audio = await request.body()
+        if not audio:
+            raise HTTPException(status_code=400, detail="empty voice recording")
+        if len(audio) > MAX_VOICE_BYTES:
+            raise HTTPException(status_code=413, detail="voice recording is too large")
+        try:
+            return await transcribe_elevenlabs(audio, content_type)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
 
     @app.post("/api/cancel")
     async def cancel():
