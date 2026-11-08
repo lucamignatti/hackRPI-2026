@@ -74,6 +74,17 @@ actions = agent.act(obs, z.expand(1, -1))
 ```
 Gemini needs `GEMINI_API_KEY`. Without it the compiler falls back to an offline keyword parser and marks the mission as offline.
 
+## Mission success eval
+Training metrics only show crash and shield rates under random z. To see whether a checkpoint actually completes the demo's missions, run:
+```bash
+python -m demo.mission_eval --checkpoint runs/NAME/agent.pt --out runs/NAME/mission_eval.json
+```
+- For every built-in mission of every scene, it compiles the text offline, infers z from the reward exactly as the demo does, flies 16 worlds, and reports success, crash, and timeout rates with the mean time to success.
+- Success follows the demo server's rules: `done_when` holds, or a carry mission's item is delivered.
+- `--baseline scripted` also scores the demo's scripted controller on the same worlds, as a reference.
+- `--scenes trash delivery` limits the scenes, `--envs` and `--rounds` set the sample size, and `--mission "text"` evaluates your own mission (with one `--scenes`).
+- It runs on the training machine next to the run. Install `pydantic` there first (`pip install pydantic`): without it the mission compiler cannot load, the eval falls back to the keyword parser, and it prints a warning.
+
 ## Judge demo
 ```bash
 .venv/bin/python -m demo.server --port 8000 --host 0.0.0.0 --backend torch --device cpu --checkpoint runs/NAME/agent.pt
