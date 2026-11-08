@@ -1492,12 +1492,14 @@ function showCard(m) {
       segs.innerHTML = `
         <div class="stage-carousel">
           <div class="stage-nav">
-            <button id="stage-prev" type="button" class="stage-arrow-btn" title="Previous stage">&#9664;</button>
             <div class="stage-nav-title">
               <span class="stage-label" id="stage-cur-label">Stage 1 of ${m.segments.length}</span>
               <span class="stage-badge" id="stage-cur-badge">z vector #1</span>
             </div>
-            <button id="stage-next" type="button" class="stage-arrow-btn" title="Next stage">&#9654;</button>
+            <div class="stage-nav-arrows">
+              <button id="stage-prev" type="button" class="stage-arrow-btn" title="Previous stage">&#9664;</button>
+              <button id="stage-next" type="button" class="stage-arrow-btn" title="Next stage">&#9654;</button>
+            </div>
           </div>
           <div class="stage-body">
             <div class="stage-goal-text" id="stage-goal"></div>

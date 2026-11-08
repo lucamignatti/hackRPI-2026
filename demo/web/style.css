@@ -145,41 +145,60 @@ body:not(.has-lake) .lake-only { display: none; }
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
   margin-bottom: 8px;
   border-bottom: 1px solid #1c2633;
   padding-bottom: 6px;
+  white-space: nowrap;
 }
 .stage-nav-title {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
+}
+.stage-nav-arrows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 .stage-label {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 12.5px;
   color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 .stage-badge {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   padding: 1px 6px;
   border-radius: 8px;
   background: rgba(56, 139, 253, 0.15);
   border: 1px solid rgba(56, 139, 253, 0.3);
   color: #a5d6ff;
+  white-space: nowrap;
 }
 .stage-arrow-btn {
   background: var(--panel2);
   border: 1px solid var(--line);
   color: var(--text);
   border-radius: 5px;
-  padding: 4px 10px;
+  padding: 3px 8px;
   font-size: 11px;
   cursor: pointer;
   line-height: 1;
   transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
 }
 .stage-arrow-btn:hover:not(:disabled) {
   background: #233144;
