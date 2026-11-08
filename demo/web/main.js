@@ -1427,7 +1427,6 @@ function renderStageView() {
   if (!seg) return;
 
   const lbl = $("stage-cur-label");
-  const bdg = $("stage-cur-badge");
   const gol = $("stage-goal");
   const rwd = $("stage-reward-code");
   const dne = $("stage-done-code");
@@ -1435,7 +1434,6 @@ function renderStageView() {
   const nxt = $("stage-next");
 
   if (lbl) lbl.textContent = `Stage ${viewStageIdx + 1} of ${currentSegments.length}`;
-  if (bdg) bdg.textContent = `z vector #${viewStageIdx + 1}`;
   if (gol) gol.textContent = seg.text || `Goal for stage ${viewStageIdx + 1}`;
   if (rwd) rwd.textContent = seg.reward || "(none)";
   if (dne) dne.textContent = seg.done_when || "(none / flies until stopped)";
@@ -1494,7 +1492,7 @@ function showCard(m) {
           <div class="stage-nav">
             <div class="stage-nav-title">
               <span class="stage-label" id="stage-cur-label">Stage 1 of ${m.segments.length}</span>
-              <span class="stage-badge" id="stage-cur-badge">z vector #1</span>
+              
             </div>
             <div class="stage-nav-arrows">
               <button id="stage-prev" type="button" class="stage-arrow-btn" title="Previous stage">&#9664;</button>
