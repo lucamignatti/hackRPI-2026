@@ -1447,89 +1447,67 @@ function showCard(m) {
     div.appendChild(c);
     ag.appendChild(div);
   }
+  const hasSegs = Array.isArray(m.segments) && m.segments.length > 0;
   const segs = $("card-segments");
   if (segs) {
     segs.innerHTML = "";
-    const hasSegs = Array.isArray(m.segments) && m.segments.length > 0;
     segs.classList.toggle("hidden", !hasSegs);
     if (hasSegs) {
       const h = document.createElement("div");
-      h.style.fontWeight = "700";
-      h.style.fontSize = "13px";
-      h.style.marginTop = "12px";
-      h.style.marginBottom = "8px";
-      h.style.color = "var(--text)";
-      h.textContent = `Sequential Stages (${m.segments.length} steps):`;
+      h.style.fontWeight = "600";
+      h.style.fontSize = "12px";
+      h.style.color = "var(--muted)";
+      h.style.textTransform = "uppercase";
+      h.style.letterSpacing = "0.05em";
+      h.style.margin = "8px 0 4px";
+      h.textContent = `Stages (${m.segments.length})`;
       segs.appendChild(h);
 
       for (const seg of m.segments) {
-        const card = document.createElement("div");
-        card.className = "stage-card";
-        card.id = `stage-card-${seg.index}`;
+        const item = document.createElement("div");
+        item.className = "stage-item";
+        item.id = `stage-card-${seg.index}`;
 
-        const hdr = document.createElement("div");
-        hdr.className = "stage-header";
+        const top = document.createElement("div");
+        top.className = "stage-item-top";
 
         const num = document.createElement("span");
-        num.className = "stage-num";
-        num.textContent = `Stage ${seg.index + 1} of ${m.segments.length}`;
-        hdr.appendChild(num);
+        num.className = "stage-item-num";
+        num.textContent = `Stage ${seg.index + 1}:`;
+        top.appendChild(num);
 
-        const badge = document.createElement("span");
-        badge.className = "stage-badge";
-        badge.textContent = `z vector #${seg.index + 1}`;
-        hdr.appendChild(badge);
+        const title = document.createElement("span");
+        title.className = "stage-item-text";
+        title.textContent = seg.text || "";
+        top.appendChild(title);
 
-        card.appendChild(hdr);
+        item.appendChild(top);
 
-        if (seg.text) {
-          const title = document.createElement("div");
-          title.className = "stage-title";
-          title.textContent = seg.text;
-          card.appendChild(title);
-        }
+        const codeLine = document.createElement("div");
+        codeLine.className = "stage-item-code";
 
-        if (seg.anchors && Object.keys(seg.anchors).length > 0) {
-          const ancDiv = document.createElement("div");
-          ancDiv.className = "stage-anchors";
-          const ancParts = Object.entries(seg.anchors).map(([k, v]) => {
-            const tgt = typeof v.target === "string" ? v.target : JSON.stringify(v.target);
-            return `${k} = ${tgt}`;
-          });
-          ancDiv.innerHTML = `<b>Target:</b> ${ancParts.join(", ")}`;
-          card.appendChild(ancDiv);
-        }
-
-        const rwLabel = document.createElement("div");
-        rwLabel.className = "stage-section-label";
-        rwLabel.textContent = "Reward Program:";
-        card.appendChild(rwLabel);
-
-        const rwCode = document.createElement("code");
-        rwCode.textContent = seg.reward;
-        card.appendChild(rwCode);
+        const rSpan = document.createElement("span");
+        rSpan.textContent = `r: ${seg.reward}`;
+        codeLine.appendChild(rSpan);
 
         if (seg.done_when) {
-          const dnLabel = document.createElement("div");
-          dnLabel.className = "stage-section-label";
-          dnLabel.textContent = "Auto-Switch Condition (Detector):";
-          card.appendChild(dnLabel);
-
-          const dnCode = document.createElement("code");
-          dnCode.className = "detector";
-          dnCode.textContent = seg.done_when;
-          card.appendChild(dnCode);
+          const dSpan = document.createElement("span");
+          dSpan.className = "done";
+          dSpan.textContent = `done: ${seg.done_when}`;
+          codeLine.appendChild(dSpan);
         }
 
-        segs.appendChild(card);
+        item.appendChild(codeLine);
+        segs.appendChild(item);
       }
     }
   }
 
-  const cardDetails = $("card").querySelector("details summary");
-  if (cardDetails) {
-    cardDetails.textContent = (m.segments && m.segments.length > 0) ? "Overall Fallback / Final Termination" : "Reward program";
-  }
+  // When stages exist, hide redundant outer anchors and details dropdown to avoid bloat
+  const cardAnchors = $("card-anchors");
+  if (cardAnchors) cardAnchors.classList.toggle("hidden", hasSegs);
+  const cardDetails = $("card").querySelector("details");
+  if (cardDetails) cardDetails.classList.toggle("hidden", hasSegs);
 
   $("card-reward").textContent = m.agents ? "(per drone, see above) fallback: " + m.reward : m.reward;
   $("card-done").textContent = m.done_when || "(none: flies until stopped or time is up)";
