@@ -148,14 +148,21 @@ class NetSim:
                 pred = torch.where(free, pred + push, pred)
         return pred
 
-    def segment_distance(self, pts: torch.Tensor) -> torch.Tensor:
-        """Distance from each point [N, A, 3] to the nearest net rope segment [N, A]."""
+    def segment_closest(self, pts: torch.Tensor):
+        """Nearest net rope point to each point [N, A, 3]: (distance [N, A], offset pts - closest [N, A, 3])."""
         p0, p1 = self.pos[:, self.ei], self.pos[:, self.ej]                 # [N, E, 3]
         seg = p1 - p0
         L2 = (seg * seg).sum(-1).clamp_min(1e-9)
         t = (((pts[:, :, None] - p0[:, None]) * seg[:, None]).sum(-1) / L2[:, None]).clamp(0.0, 1.0)
         closest = p0[:, None] + seg[:, None] * t.unsqueeze(-1)
-        return (pts[:, :, None] - closest).norm(dim=-1).amin(-1)
+        off = pts[:, :, None] - closest                                     # [N, A, E, 3]
+        d = off.norm(dim=-1)
+        dmin, k = d.min(-1)
+        return dmin, torch.gather(off, 2, k[..., None, None].expand(*k.shape, 1, 3)).squeeze(2)
+
+    def segment_distance(self, pts: torch.Tensor) -> torch.Tensor:
+        """Distance from each point [N, A, 3] to the nearest net rope segment [N, A]."""
+        return self.segment_closest(pts)[0]
 
     def _wet_mask(self, water_height: torch.Tensor) -> torch.Tensor:
         return self.pos[..., 2] < water_height

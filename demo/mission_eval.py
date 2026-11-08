@@ -49,6 +49,9 @@ MISSIONS: Dict[str, List[str]] = {
 }
 
 
+TRIVIAL_STEPS = 10      # a mission "done" within 0.5 s was already done when it started (e.g. item next to the bin)
+
+
 @dataclass
 class MissionResult:
     scene: str
@@ -62,6 +65,7 @@ class MissionResult:
     mean_reward: float                    # mean per-step reward of the compiled program
     seconds: float                        # wall-clock for this mission
     notes: List[str] = field(default_factory=list)
+    trivial: float = 0.0                  # worlds already done before the first step (excluded from the rates)
 
 
 class _WorldView:
@@ -167,6 +171,12 @@ def run_mission(scene: str, text: str, agent, *, envs: int = 16, seed: int = 0, 
     z = torch.stack(zs).to(getattr(agent, "device", "cpu")) if agent is not None else None   # [N, A, d]
     obs = P.observe(env)
     status = ["flying"] * n
+    for i in range(n):            # already done at the start (e.g. the item spawned next to the bin): not a success
+        try:
+            if _done_now(missions[i], obs["g"][i], set()):
+                status[i] = "trivial"
+        except Exception:
+            pass
     t_succ: List[float] = []
     latched = [set() for _ in range(n)]
     rew_sum, rew_cnt = 0.0, 0
@@ -191,7 +201,9 @@ def run_mission(scene: str, text: str, agent, *, envs: int = 16, seed: int = 0, 
                 notes.append(f"world {i}: reward evaluation failed: {e}")
                 ok = False
             delivered = _is_carry(m) and bool(out.events["delivered"][i].any())
-            if ok or delivered:
+            if (ok or delivered) and step + 1 < TRIVIAL_STEPS:   # met before the drone could do anything
+                status[i] = "trivial"
+            elif ok or delivered:
                 status[i] = "success"
                 t_succ.append((step + 1) * spec.POLICY_DT)
             elif bool(out.done[i]):
@@ -199,9 +211,14 @@ def run_mission(scene: str, text: str, agent, *, envs: int = 16, seed: int = 0, 
         if all(s != "flying" for s in status):
             break
     status = [s if s != "flying" else "timeout" for s in status]
-    frac = lambda k: sum(s == k for s in status) / n   # noqa: E731
+    scored = max(sum(s != "trivial" for s in status), 1)
+    frac = lambda k: sum(s == k for s in status) / scored   # noqa: E731
+    n_triv = sum(s == "trivial" for s in status)
+    if n_triv:
+        notes.insert(0, f"{n_triv} world(s) met done_when within {TRIVIAL_STEPS} steps (already done at the start); excluded from the rates")
     return MissionResult(scene=scene, mission=text, controller="policy" if agent is not None else "scripted",
                          worlds=n, success=frac("success"), failure=frac("failure"), timeout=frac("timeout"),
+                         trivial=n_triv / n,
                          mean_success_s=(sum(t_succ) / len(t_succ)) if t_succ else None,
                          mean_reward=rew_sum / max(rew_cnt, 1), seconds=time.time() - t0, notes=notes[:10])
 
@@ -233,7 +250,7 @@ def _merge(parts: List[MissionResult]) -> MissionResult:
     return MissionResult(scene=parts[0].scene, mission=parts[0].mission, controller=parts[0].controller, worlds=w,
                          success=avg("success"), failure=avg("failure"), timeout=avg("timeout"),
                          mean_success_s=(sum(t * c for t, c in succ) / ns) if ns else None,
-                         mean_reward=avg("mean_reward"), seconds=sum(p.seconds for p in parts),
+                         mean_reward=avg("mean_reward"), seconds=sum(p.seconds for p in parts), trivial=avg("trivial"),
                          notes=[x for p in parts for x in p.notes][:10])
 
 
@@ -241,7 +258,8 @@ def _row(r: MissionResult) -> str:
     t = f"{r.mean_success_s:5.1f}s" if r.mean_success_s is not None else "   -  "
     return (f"[{r.controller:8s}] {r.scene:8s} success {100 * r.success:5.1f}%  crash {100 * r.failure:5.1f}%  "
             f"timeout {100 * r.timeout:5.1f}%  t_success {t}  reward {r.mean_reward:7.3f}  "
-            f"({r.worlds} worlds, {r.seconds:.0f}s)  {r.mission[:70]}")
+            f"({r.worlds} worlds{f', {round(r.trivial * r.worlds)} trivial' if r.trivial else ''}, {r.seconds:.0f}s)  "
+            f"{r.mission[:70]}")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> List[MissionResult]:

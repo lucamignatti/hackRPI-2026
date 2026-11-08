@@ -52,6 +52,9 @@ class Config:
     scale_reg: bool = True             # Motivo: scale lambda terms by mean |F^T z| (detached)
     disc_reward_clip: float = 10.0     # clamp on log(D / (1 - D))
     grad_clip: float = 0.0             # 0 = off
+    cuda_graph: bool = False           # capture the FB-CPR update core into a CUDA graph (CUDA only)
+    lr_scale: float = 1.0              # multiply every learning rate (large data-parallel batches)
+    lr_warmup: int = 0                 # updates over which the scaled rates ramp up linearly from 1x
     q_loss_coef: float = -1.0          # auxiliary diagonal F loss (Touati 2023 eq. 9); < 0 means 1/d
 
     # ------------------------------------------------------------ penalties for Q_R (computed from g)
@@ -109,6 +112,7 @@ class Config:
     device: str = "cuda"
     steps: int = 100_000               # training iterations (env steps per world)
     out: str = "runs/default"
+    init_from: str = ""                # agent.pt to continue training from (networks, optimizers if saved)
     seed: int = 0
     lidar: bool = True
     log_every: int = 50

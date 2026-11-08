@@ -253,7 +253,8 @@ def test_terrain_soft_landing_hard_crash_and_water():
     env.pos[i, 0] = torch.stack([env.terrain.gx[r, c], env.terrain.gy[r, c], lvl[i] - 0.2])
     env.vel[i] = 0.0
     out = env.step(zeros(env))
-    assert bool(out.done[i])                                       # flew into a lake
+    assert not bool(out.done[i]) and bool(out.events["shield"][i, 0])   # skims the lake, penalised, not terminal
+    assert float(env.pos[i, 0, 2]) >= float(lvl[i]) - 0.2
 
 
 def test_shield_keeps_drone_out_of_nofly_and_off_the_ground():
@@ -684,12 +685,17 @@ def test_ocean_has_four_drones_one_per_corner():
     spec.check_obs(env.observe(), 2, 4)
 
 
-def test_drone_touching_the_net_crashes():
+def test_drone_cannot_fly_through_the_net_and_contact_is_not_terminal():
     env = make_env("ocean", 1, lidar=False, shield=False)
-    env.pos[0, 0] = env.net.pos[0, 27] + torch.tensor([0.0, 0.0, 0.2])   # rotors in the mesh
+    edge = 2                                                             # a floating edge node (row 0)
+    env.pos[0, 0] = env.net.pos[0, edge] + torch.tensor([0.0, 0.0, 0.3])  # just above the rope
     env.vel.zero_()
+    env.vel[0, 0, 2] = -3.0                                              # diving into it
     out = env.step(zeros(env))
-    assert bool(out.done[0]) and bool(out.events["collision"][0, 0])
+    assert not bool(out.done[0]) and not bool(out.events["collision"][0, 0])
+    assert bool(out.events["shield"][0, 0])                              # penalised like a shield save
+    d = env.net.segment_distance(env.pos)[0, 0]
+    assert float(d) >= spec.DRONE_RADIUS + 0.05 - 1e-3                   # pushed back out of the ropes
 
 
 def test_net_cannot_pass_through_the_boat_or_seabed():
@@ -748,9 +754,28 @@ def test_distance_fields_use_one_cap_in_every_scene(scene):
 
 def test_only_the_crashed_drone_is_terminal():
     env = make_env("ocean", 2, lidar=False, shield=False)
-    env.pos[0, 1] = env.net.pos[0, 27] + torch.tensor([0.0, 0.0, 0.2])   # drone 1 flies into the net
+    from skyhand.env.core import BOAT_SLOT
+    env.pos[0, 1] = env.box_c[0, BOAT_SLOT]                              # drone 1 flies into the boat
     env.vel.zero_()
     out = env.step(zeros(env))
     assert bool(out.done[0]) and not bool(out.done[1])
     ad = out.info["agent_done"]
     assert ad[0].tolist() == [False, True, False, False] and not ad[1].any()
+
+
+@pytest.mark.parametrize("scene", ["trash", "delivery"])
+def test_arena_edge_is_a_soft_wall_not_a_terminal(scene):
+    """Flying off is not an escape: the drone is held at the wall, the episode goes on, and the
+    touch counts as a shield intervention."""
+    env = make_env(scene, 1, lidar=False, shield=False)
+    act = zeros(env)
+    act[..., 0] = 1.0                                                    # full speed east
+    act[..., 2] = 1.0                                                    # and up
+    lim = env.arena_half + env.WALL_MARGIN
+    touched = False
+    for _ in range(env.episode_steps - 1):                               # long enough to cross the arena
+        out = env.step(act)
+        assert not bool(out.done[0])
+        touched |= bool(out.events["shield"][0, 0])
+        assert float(env.pos[0, 0, 0]) <= lim + 1e-4
+    assert touched and float(env.pos[0, 0, 0]) > lim - 1.0               # pressed against the wall

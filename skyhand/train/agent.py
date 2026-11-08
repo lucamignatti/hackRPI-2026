@@ -95,6 +95,22 @@ class Agent:
         torch.save(self.state_dict(with_optim), tmp)
         os.replace(tmp, path)
 
+    def load_weights(self, path: str) -> dict:
+        """Load a checkpoint's networks (and optimizers, when saved) into this agent, to continue
+        training. The checkpoint must come from the same architecture. Returns the checkpoint's config."""
+        st = torch.load(path, map_location=self.device, weights_only=False)
+        if st.get("method", self.method) != self.method:
+            raise ValueError(f"checkpoint method {st.get('method')!r} != {self.method!r}")
+        L = self.learner
+        for k, sd in st["nets"].items():
+            getattr(L, k).load_state_dict(sd)
+        L.num_updates = st.get("num_updates", 0)
+        gp = st.get("g_pool")
+        self.g_pool = None if gp is None else gp.to(self.device)
+        for k, sd in (st.get("optim") or {}).items():
+            getattr(L, k).load_state_dict(sd)
+        return st.get("config", {})
+
     @classmethod
     def load(cls, path: str, device="cpu") -> "Agent":
         st = torch.load(path, map_location=device, weights_only=False)

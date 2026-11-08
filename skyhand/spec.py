@@ -198,16 +198,27 @@ def _vec3_mask() -> torch.Tensor:
 G_VEC3_MASK = _vec3_mask()
 
 
+G_VEC3_IDX = torch.nonzero(G_VEC3_MASK).reshape(-1)        # positions of the compressed vector fields
+_G_IDX_ON: Dict[str, torch.Tensor] = {}
+
+
+def _vec3_idx(device) -> torch.Tensor:
+    """G_VEC3_IDX on `device`, cached: no host-to-device copy per call (CUDA-graph safe)."""
+    key = str(device)
+    t = _G_IDX_ON.get(key)
+    if t is None:
+        t = _G_IDX_ON[key] = G_VEC3_IDX.to(device)
+    return t
+
+
 def g_normalize(g: torch.Tensor, scale: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Network input for g [..., G_DIM]: g / scale with G_VEC3_FIELDS norm-compressed."""
     x = g / (g_scale(g.device) if scale is None else scale)
-    mask = G_VEC3_MASK.to(g.device)
-    v = x[..., mask].unflatten(-1, (-1, 3))
+    idx = _vec3_idx(g.device)
+    v = x.index_select(-1, idx).unflatten(-1, (-1, 3))
     n = v.norm(dim=-1, keepdim=True).clamp_min(1e-6)
     v = v * (torch.log1p(n) / n)                                       # -> 1 as n -> 0
-    out = x.clone()
-    out[..., mask] = v.flatten(-2)
-    return out
+    return x.index_copy(x.dim() - 1, idx, v.flatten(-2))
 
 
 def g_field(g: torch.Tensor, name: str) -> torch.Tensor:

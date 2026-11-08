@@ -550,3 +550,33 @@ def test_buffer_stores_per_drone_done():
 
 def test_default_discount_covers_long_legs():
     assert Config().gamma >= 0.995
+
+
+def test_continue_training_from_a_checkpoint(tmp_path):
+    from skyhand.train.train import Trainer
+    cfg = tiny_config(out=str(tmp_path / "a"), steps=6)
+    tr = Trainer(cfg)
+    path = tr.run()
+    st = torch.load(path, map_location="cpu", weights_only=False)
+    assert "optim" in st and st["num_updates"] > 0                     # checkpoints can be continued
+    cfg2 = tiny_config(out=str(tmp_path / "b"), steps=4, init_from=path)
+    tr2 = Trainer(cfg2)
+    assert tr2.agent.learner.num_updates == st["num_updates"]
+    for k, sd in st["nets"].items():                                     # same weights before training on
+        for n, v in getattr(tr2.agent.learner, k).state_dict().items():
+            assert torch.equal(v.cpu(), sd[n].cpu()), (k, n)
+    tr2.run()
+    assert tr2.agent.learner.num_updates > st["num_updates"]
+
+
+def test_lr_scale_ramps_up_over_warmup():
+    from skyhand.train.fb_cpr import FBCPR
+    cfg = tiny_config(lr_scale=4.0, lr_warmup=4)
+    L = FBCPR(cfg, "cpu")
+    seen = []
+    for _ in range(6):
+        L._apply_lr()
+        seen.append(L.opt_actor.param_groups[0]["lr"] / cfg.lr_actor)
+        L.num_updates += 1
+    assert seen[0] == pytest.approx(1.75) and seen[3:] == [pytest.approx(4.0)] * 3
+    assert L.opt_fb.param_groups[1]["lr"] == pytest.approx(cfg.lr_b * 4.0)   # B keeps its own (lower) rate

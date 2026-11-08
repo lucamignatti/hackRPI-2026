@@ -129,6 +129,7 @@ class SkyEnv:
         self.net_force = zf(n, a, 3)                  # pull of the held net corner on each drone
         self.v_int = zf(n, a, 3)
         self.collided = zb(n, a)
+        self.water_hit = zb(n, a)                     # touched the water this step (soft floor, penalised)
         self.shield_hit = zb(n, a)
         self.shield_count = zl(n)
         self.swing = zf(n, a)
@@ -810,6 +811,7 @@ class SkyEnv:
         self.shield_hit = hit & self.alive
         self.shield_count += self.shield_hit.sum(-1)
         self.collided = torch.zeros(n, a, dtype=torch.bool, device=self.device)
+        self.water_hit = torch.zeros(n, a, dtype=torch.bool, device=self.device)
         crash = torch.zeros(n, dtype=torch.bool, device=self.device)
         for _ in range(spec.SUBSTEPS):
             self._move_dynamic(spec.PHYS_DT)
@@ -851,13 +853,18 @@ class SkyEnv:
                 due = ((self.steps + phase) % interval) == 0
                 if due.any():
                     self._scan(torch.nonzero(due).squeeze(-1), agents)
+        # Soft walls at the arena edge and the ceiling: a drone that reaches one is held there with its
+        # outward velocity removed, and it counts as a shield intervention (penalised through g). They are
+        # not terminal: a terminal "leave the arena" lets an FB actor escape every negative reward by
+        # flying off, which it learns quickly.
+        wall = self._soft_walls() | self._net_contact() | self.water_hit
+        self.shield_hit = self.shield_hit | wall
         events["collision"] = self.collided
         events["shield"] = self.shield_hit
         if self.has_items:
             events["delivered"] |= self._check_delivered().unsqueeze(-1).expand(n, a)
-        ceiling = self.terrain.max_height().clamp_min(0.0)[:, None] + 60.0
-        oob = ((self.pos[..., :2].abs() > self.arena_half + 5).any(-1) | (self.pos[..., 2] > ceiling)) & self.alive
-        done = crash | oob.any(-1) | ~self.alive.any(-1)
+        oob = torch.zeros_like(self.collided)
+        done = crash | ~self.alive.any(-1)
         truncated = (self.steps >= self.episode_steps) & ~done
         # which drones ended the episode (crashed or left the arena); their teammates' last
         # transitions are cut off, not terminal. A world that ends otherwise marks every drone.
@@ -867,6 +874,46 @@ class SkyEnv:
                        info={"shield_count": self.shield_count.clone(), "agent_done": agent_done})
 
     # ================================================================ dynamics
+    WALL_MARGIN = 4.0          # m beyond the arena half-width where the soft wall sits
+    CEILING = 60.0             # m above the highest terrain
+
+    def _soft_walls(self) -> torch.Tensor:
+        """Hold drones inside the arena box and under the ceiling; [N, A] True where a wall touched."""
+        lim = self.arena_half + self.WALL_MARGIN
+        top = self.terrain.max_height().clamp_min(0.0)[:, None] + self.CEILING          # [N, 1]
+        xy, z = self.pos[..., :2], self.pos[..., 2]
+        out_xy = xy.abs() > lim                                                           # [N, A, 2]
+        out_z = z > top
+        hit = (out_xy.any(-1) | out_z) & self.alive
+        if bool(hit.any()):
+            self.pos[..., :2] = xy.clamp(-lim, lim)
+            self.pos[..., 2] = torch.minimum(z, top.expand_as(z))
+            vxy = self.vel[..., :2]
+            outward = out_xy & (vxy * xy.sign() > 0)
+            self.vel[..., :2] = torch.where(outward, torch.zeros_like(vxy), vxy)
+            self.vel[..., 2] = torch.where(out_z, self.vel[..., 2].clamp(max=0.0), self.vel[..., 2])
+        return hit
+
+    def _net_contact(self) -> torch.Tensor:
+        """Drones cannot fly through the net ropes: one that touches a rope is pushed back out along the
+        rope's normal with its velocity into the rope removed. Like the soft walls this is not terminal (a
+        terminal contact would let the actor end bad episodes on purpose); it counts as a shield intervention.
+        Returns [N, A] bool where a rope was touched."""
+        if not self.has_net:
+            return torch.zeros_like(self.collided)
+        clear = spec.DRONE_RADIUS + 0.05
+        d, off = self.net.segment_closest(self.pos)
+        touch = (d < clear) & self.alive
+        if bool(touch.any()):
+            nrm = off / d.unsqueeze(-1).clamp_min(1e-6)
+            up = torch.tensor([0.0, 0.0, 1.0], device=self.device).expand_as(nrm)
+            nrm = torch.where((d > 1e-4).unsqueeze(-1), nrm, up)          # exactly on the rope: push up
+            t3 = touch.unsqueeze(-1)
+            self.pos = torch.where(t3, self.pos + nrm * (clear - d).clamp_min(0.0).unsqueeze(-1), self.pos)
+            vn = (self.vel * nrm).sum(-1, keepdim=True)
+            self.vel = torch.where(t3 & (vn < 0), self.vel - vn * nrm, self.vel)
+        return touch
+
     def _held_mass(self) -> torch.Tensor:
         m = torch.zeros_like(self.mass)
         if not self.has_items:
@@ -1158,11 +1205,12 @@ class SkyEnv:
         soft = low & ~hard & alive
         self.pos[..., 2] = torch.where(soft, ground + r, self.pos[..., 2])
         self.vel[..., 2] = torch.where(soft, self.vel[..., 2].clamp_min(0.0), self.vel[..., 2])
-        wet = self.pos[..., 2] < water + 0.05
-        hit_net = torch.zeros_like(wet)
-        if self.has_net:                    # rotors and net ropes do not mix
-            hit_net = self.net.segment_distance(self.pos) < r + 0.05
-        hit = (hit_box | hit_sph | hit_mate | hard | wet | hit_net) & alive
+        wet = (self.pos[..., 2] < water + 0.05) & alive
+        if bool(wet.any()):    # water is a soft floor, not terminal (see _soft_walls): the drone skims it
+            self.pos[..., 2] = torch.where(wet, water + 0.05, self.pos[..., 2])
+            self.vel[..., 2] = torch.where(wet, self.vel[..., 2].clamp_min(0.0), self.vel[..., 2])
+        self.water_hit |= wet
+        hit = (hit_box | hit_sph | hit_mate | hard) & alive                # net ropes: see _net_contact
         self.collided |= hit
         return hit.any(-1)
 

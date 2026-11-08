@@ -27,6 +27,7 @@ import torch
 
 from .. import spec
 from ..env.core import make_env
+from . import dist as D
 from .agent import Agent
 from .buffer import DemoStore, ReplayBuffer
 from .config import Config, tiny_config
@@ -72,9 +73,19 @@ class _Stream:
 class Trainer:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        torch.manual_seed(cfg.seed)
+        self.rank, self.world = D.rank(), D.world_size()
+        torch.manual_seed(cfg.seed)                    # identical network init on every rank
         self.device = torch.device(cfg.device)
         self.agent = Agent(cfg, self.device)
+        if cfg.init_from:
+            self.agent.load_weights(cfg.init_from)
+            print(f"[train] continuing from {cfg.init_from} (updates so far: {self.agent.learner.num_updates})",
+                  flush=True)
+        D.broadcast_module(self.agent.learner)         # data-parallel: every rank starts from rank 0's weights
+        if self.world > 1:
+            torch.manual_seed(cfg.seed + 7919 * self.rank)   # but each rank sees different worlds and noise
+            print(f"[train] data-parallel: {self.world} ranks, {cfg.batch_size} samples per rank per update "
+                  f"({cfg.batch_size * self.world} per update)", flush=True)
         d = self.agent.d
         bdev = cfg.buffer_device or cfg.device
         self.buffer = ReplayBuffer(cfg.buffer_capacity, d, bdev)
@@ -83,7 +94,8 @@ class Trainer:
         self.streams: List[_Stream] = []
         off = 0
         for i, sc in enumerate(scenes):
-            env = make_env(sc, cfg.num_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar, seed=cfg.seed + i,
+            env = make_env(sc, cfg.num_envs, cfg.device, backend=cfg.backend, lidar=cfg.lidar,
+                           seed=cfg.seed + i + 1000 * self.rank,
                            domain_rand=cfg.domain_rand, rand_drone_dynamics=cfg.rand_drone_dynamics,
                            enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
                            enable_gusts=cfg.enable_gusts)
@@ -94,9 +106,10 @@ class Trainer:
         self.expert_ok = True
         self.iter = 0
         self.env_steps = 0
-        os.makedirs(cfg.out, exist_ok=True)
-        with open(os.path.join(cfg.out, "config.json"), "w") as f:
-            json.dump(cfg.to_dict(), f, indent=2)
+        if D.is_main():
+            os.makedirs(cfg.out, exist_ok=True)
+            with open(os.path.join(cfg.out, "config.json"), "w") as f:
+                json.dump(cfg.to_dict(), f, indent=2)
         self._csv_path = os.path.join(cfg.out, "metrics.csv")
         self._csv_fields: Optional[List[str]] = None
         self._acc: Dict[str, float] = {}       # learner metrics summed since the last log
@@ -163,7 +176,7 @@ class Trainer:
             steps = cfg.demo_steps
             if sc not in self.demo_envs:
                 self.demo_envs[sc] = make_env(sc, cfg.demo_envs, cfg.device, backend=cfg.backend,
-                                              lidar=False, seed=cfg.seed + 100 + st.idx,
+                                              lidar=False, seed=cfg.seed + 100 + st.idx + 1000 * self.rank,
                                               domain_rand=cfg.domain_rand,
                                               rand_drone_dynamics=cfg.rand_drone_dynamics,
                                               enable_wind=cfg.enable_wind, dynamic_wind=cfg.dynamic_wind,
@@ -216,6 +229,9 @@ class Trainer:
     def _log(self) -> None:
         """One metrics row: env rates averaged over the window, learner losses averaged over
         the updates in it, and any eval metrics produced since the last row."""
+        if not D.is_main():                            # only rank 0 writes metrics
+            self._acc, self._acc_n, self._env_acc, self._env_n, self._pending_eval = {}, 0, {}, 0, {}
+            return
         row = {"iter": self.iter, "env_steps": self.env_steps, "updates": self.agent.learner.num_updates,
                "buffer": len(self.buffer), "demo_segs": len(self.demo),
                "sps": round(self.env_steps / max(time.time() - self._t0, 1e-6), 1)}
@@ -259,19 +275,30 @@ class Trainer:
 
     def save(self, name: str = "agent.pt") -> str:
         path = os.path.join(self.cfg.out, name)
+        if not D.is_main():                            # every rank holds the same weights; rank 0 saves
+            return path
         self.agent.g_pool = self.g_pool()
-        self.agent.save(path)
+        self.agent.save(path, with_optim=True)        # optimizers too, so --init-from can continue the run
         return path
 
     # -------------------------------------------------- main loop
     def run(self) -> str:
         cfg = self.cfg
+        t0 = time.time()
+        print(f"[train] collecting expert demos ({len(self.streams)} scenes, first collection is a full episode)",
+              flush=True)
         self.collect_demos()
-        for _ in range(cfg.warm_steps):
+        print(f"[train] demos collected: demo_segs={len(self.demo)} in {time.time() - t0:.0f}s", flush=True)
+        t1 = time.time()
+        for w in range(1, cfg.warm_steps + 1):
             for st in self.streams:
                 self.env_step(st, warm=True)
+            if w % 25 == 0 or w == cfg.warm_steps:
+                el = time.time() - t1
+                print(f"[train] warm start {w}/{cfg.warm_steps} buffer={len(self.buffer)} "
+                      f"{el:.0f}s elapsed, ~{el / w * (cfg.warm_steps - w):.0f}s left", flush=True)
         print(f"[train] warm start done: buffer={len(self.buffer)} demo_segs={len(self.demo)} "
-              f"expert={'yes' if self.expert_ok else 'no'}", flush=True)
+              f"expert={'yes' if self.expert_ok else 'no'} ({time.time() - t0:.0f}s since start)", flush=True)
         for it in range(1, cfg.steps + 1):
             self.iter = it
             st = self.streams[(it - 1) % len(self.streams)]
@@ -285,7 +312,7 @@ class Trainer:
                 self._acc_n += 1
             if cfg.demo_every and it % cfg.demo_every == 0:
                 self.collect_demos()
-            if cfg.eval_every and it % cfg.eval_every == 0:
+            if cfg.eval_every and it % cfg.eval_every == 0 and D.is_main():
                 self._pending_eval.update(self.evaluate())
             if cfg.log_every and it % cfg.log_every == 0:
                 self._log()
@@ -363,6 +390,8 @@ def parse_args(argv: Optional[List[str]] = None, with_eval: bool = False):
     p.add_argument("--num-envs", type=int, default=None)
     p.add_argument("--device", default=None, help="cuda | cpu | mps")
     p.add_argument("--steps", type=int, default=None)
+    p.add_argument("--init-from", default=None, metavar="CHECKPOINT",
+                   help="continue training from this agent.pt (same architecture)")
     p.add_argument("--out", default=None)
     p.add_argument("--method", choices=["fb", "sf"], default=None)
     p.add_argument("--batch-size", type=int, default=None)
@@ -395,7 +424,7 @@ def parse_args(argv: Optional[List[str]] = None, with_eval: bool = False):
     direct = {"num_envs": a.num_envs, "device": a.device, "steps": a.steps, "out": a.out,
               "method": a.method, "batch_size": a.batch_size, "updates_per_step": a.updates_per_step,
               "warm_steps": a.warm_steps, "buffer_capacity": a.buffer_capacity,
-              "buffer_device": a.buffer_device, "seed": a.seed}
+              "buffer_device": a.buffer_device, "seed": a.seed, "init_from": a.init_from}
     for k, v in direct.items():
         if v is not None:
             setattr(cfg, k, v)
@@ -447,6 +476,9 @@ def main(argv: Optional[List[str]] = None) -> str:
         metrics = eval_checkpoint(eval_ckpt, cfg)
         print("[eval] " + " ".join(f"{k}={v:.4g}" for k, v in metrics.items()), flush=True)
         return eval_ckpt
+    rank, world, _ = D.init_from_env(cfg.device)
+    if rank != 0:                                      # one log stream: other ranks only print errors
+        sys.stdout = open(os.devnull, "w")
     print(f"[train] method={cfg.method} scene={cfg.scene} backend={cfg.backend} envs={cfg.num_envs} "
           f"device={cfg.device} out={cfg.out}", flush=True)
     path = Trainer(cfg).run()

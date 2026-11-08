@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .. import spec
+from . import dist as D
 from .config import Config
 from .nets import BNet, build_networks, sphere
 from .zsample import ZSampler
@@ -155,8 +156,9 @@ class FBCPR(nn.Module):
     def _step(self, opt, loss, params=None):
         opt.zero_grad(set_to_none=True)
         loss.backward()
+        ps = [p for grp in opt.param_groups for p in grp["params"]]
+        D.allreduce_grads(ps)                          # data-parallel: every rank steps on the mean gradient
         if self.cfg.grad_clip > 0:
-            ps = [p for grp in opt.param_groups for p in grp["params"]]
             torch.nn.utils.clip_grad_norm_(ps, self.cfg.grad_clip)
         opt.step()
 
@@ -174,64 +176,125 @@ class FBCPR(nn.Module):
         return sphere((reward.reshape(-1, 1).float() * e).mean(0))
 
     # -------------------------------------------------- update
-    def update(self, batch: Dict[str, object], demo=None) -> Dict[str, float]:
-        """One FB-CPR gradient step on a replay batch; demo is a DemoStore or None."""
+    # One update = _prepare (eager: everything random or data-dependent, plus the pseudo-inverse) and
+    # _core (pure tensor math with static shapes and no host syncs). With cfg.cuda_graph the core is
+    # captured once into a CUDA graph and replayed, which removes the per-kernel launch overhead.
+    def _prepare(self, batch: Dict[str, object], demo) -> Tuple[Dict[str, object], bool, bool]:
         cfg = self.cfg
-        obs, nobs = batch["obs"], batch["next_obs"]
-        g, ng, done = batch["g"], batch["next_g"], batch["done"]
+        g, ng = batch["g"], batch["next_g"]
         b = g.shape[0]
         have_demo = demo is not None and len(demo) > 0
+        if D.active():   # the discriminator steps on every rank or on none (its all-reduce must match up)
+            t = torch.tensor([1 if have_demo else 0], device=g.device)
+            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.MIN)
+            have_demo = bool(t.item())
         # discriminator negatives are policy states only: expert-flown transitions are excluded
         expert = batch.get("expert")
         neg = torch.ones(b, dtype=torch.bool, device=g.device) if expert is None else ~expert.to(g.device).bool()
-        m: Dict[str, float] = {}
-        # z for this batch from the mixture (buffer states = this batch's next g)
-        z = self.zs.sample(b, self.encode_g, demo=demo, g_pool=ng)
+        step_d = have_demo and bool(neg.any())
+        if D.active():   # every rank steps D or none does: a rank skipping it would hang the all-reduce
+            t = torch.tensor([1 if step_d else 0], device=g.device)
+            torch.distributed.all_reduce(t, op=torch.distributed.ReduceOp.MIN)
+            step_d = bool(t.item())
+        inp: Dict[str, object] = {k: batch[k] for k in ("obs", "next_obs", "action", "g", "next_g", "done")}
+        inp["z_beh"] = batch["z"]
+        inp["neg"] = neg.float()
         with torch.no_grad():
-            noise = (cfg.target_noise * torch.randn(b, spec.ACTION_DIM, device=g.device)
-                     ).clamp(-cfg.target_noise_clip, cfg.target_noise_clip)
-            a_next = (self.actor(nobs, z) + noise).clamp(-1.0, 1.0)
+            # z for this batch from the mixture (buffer states = this batch's next g)
+            z = self.zs.sample(b, self.encode_g, demo=demo, g_pool=ng)
+            inp["z"] = z
+            inp["noise"] = (cfg.target_noise * torch.randn(b, spec.ACTION_DIM, device=g.device)
+                            ).clamp(-cfg.target_noise_clip, cfg.target_noise_clip)
+            if self.method == "fb":
+                coef = cfg.q_loss_coef if cfg.q_loss_coef >= 0 else 1.0 / self.d
+                if coef > 0:   # Bz = B(s')^T Cov^+ z for the auxiliary diagonal loss
+                    Bd = self.B(ng)
+                    cov = Bd.t() @ Bd / Bd.shape[0]
+                    inp["Bz"] = ((Bd @ _pinv(cov)) * z).sum(-1)
+            if step_d:
+                L = demo.seg_len
+                k = max(1, b // L)
+                segs = demo.sample_segments(k, g.device)
+                z_tau = self.zs.encode_segments(self.encode_g, segs)              # [k, d]
+                inp["pos_g"] = segs.reshape(k * L, -1)
+                inp["pos_z"] = z_tau.unsqueeze(1).expand(k, L, self.d).reshape(k * L, self.d).contiguous()
+                inp["alpha"] = torch.rand(min(k * L, b), 1, device=g.device)
+        return inp, have_demo, step_d
+
+    def _repr_core(self, inp, a_next) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        """FB measure loss + orthonormality + auxiliary diagonal loss, from prepared inputs."""
+        cfg = self.cfg
+        obs, nobs, ng, done, z = inp["obs"], inp["next_obs"], inp["next_g"], inp["done"], inp["z"]
+        with torch.no_grad():
+            tF = self.F_t(nobs, z, a_next)                                    # [n, b, d]
+            tB = self.B_t(ng)
+            tM = torch.einsum("nid,jd->nij", tF, tB).min(0).values            # [b, b]
+        Fk = self.F(obs, z, inp["action"])
+        Bn = self.B(ng)
+        l_fb, off, diag = fb_measure_loss(Fk, Bn, tM, done, cfg.gamma)
+        l_or = ortho_loss(self.B(inp["g"]))
+        loss = l_fb + cfg.ortho_coef * l_or
+        l_q = torch.zeros((), device=Fk.device)
+        if "Bz" in inp:
+            coef = cfg.q_loss_coef if cfg.q_loss_coef >= 0 else 1.0 / self.d
+            with torch.no_grad():
+                tFz = (tF * z.unsqueeze(0)).sum(-1).min(0).values                 # [b]
+            l_q = fb_q_loss((Fk * z.unsqueeze(0)).sum(-1), inp["Bz"], tFz, done, cfg.gamma)
+            loss = loss + coef * l_q
+        return loss, {"fb_loss": l_fb.detach(), "fb_offdiag": off.detach(), "fb_diag": diag.detach(),
+                      "ortho_loss": l_or.detach(), "fb_q_loss": l_q.detach()}
+
+    def _core(self, inp, have_demo: bool, step_d: bool) -> Dict[str, torch.Tensor]:
+        cfg = self.cfg
+        obs, nobs, g, ng, done, z = (inp["obs"], inp["next_obs"], inp["g"], inp["next_g"], inp["done"], inp["z"])
+        b = g.shape[0]
+        neg = inp["neg"]
+        m: Dict[str, torch.Tensor] = {}
+        zero = torch.zeros((), device=g.device)
+        with torch.no_grad():
+            a_next = (self.actor(nobs, z) + inp["noise"]).clamp(-1.0, 1.0)
 
         # ---- representation (FB or SF)
-        loss, mm = self._repr_loss(batch, z, a_next)
+        if self.method == "fb":
+            loss, mm = self._repr_core(inp, a_next)
+        else:
+            loss, mf = self._repr_loss({"obs": obs, "next_obs": nobs, "next_g": ng, "done": done,
+                                        "g": g, "action": inp["action"]}, z, a_next)
+            mm = {k: torch.as_tensor(v, device=g.device, dtype=torch.float32) for k, v in mf.items()}
         self._step(self.opt_fb, loss)
         m.update(mm)
 
-        # ---- discriminator
-        if have_demo and neg.any():
-            L = demo.seg_len
-            k = max(1, b // L)
-            segs = demo.sample_segments(k, g.device)
-            with torch.no_grad():
-                z_tau = self.zs.encode_segments(self.encode_g, segs)              # [k, d]
-            pos_g = segs.reshape(k * L, -1)
-            pos_z = z_tau.unsqueeze(1).expand(k, L, self.d).reshape(k * L, self.d)
-            neg_g, neg_z = g[neg], batch["z"][neg]
+        # ---- discriminator (negatives = policy-flown rows, by mask: static shapes)
+        if step_d:
+            pos_g, pos_z, alpha = inp["pos_g"], inp["pos_z"], inp["alpha"]
+            z_beh = inp["z_beh"]
             _, lp = self.D(pos_g, pos_z)
-            _, ln_ = self.D(neg_g, neg_z)
+            _, ln_ = self.D(g, z_beh)
+            nsum = neg.sum().clamp_min(1.0)
             bce = F.binary_cross_entropy_with_logits(lp, torch.ones_like(lp)) + \
-                F.binary_cross_entropy_with_logits(ln_, torch.zeros_like(ln_))
-            nn_ = min(pos_g.shape[0], neg_g.shape[0])
+                (F.binary_cross_entropy_with_logits(ln_, torch.zeros_like(ln_), reduction="none") * neg).sum() / nsum
+            nn_ = alpha.shape[0]
             xp = self.D.features(pos_g[:nn_], pos_z[:nn_])
-            xn = self.D.features(neg_g[:nn_], neg_z[:nn_])
-            alpha = torch.rand(nn_, 1, device=g.device)
+            xn = self.D.features(g[:nn_], z_beh[:nn_])
             xi = (alpha * xp + (1 - alpha) * xn).detach().requires_grad_(True)
             li = self.D.logits_from_features(xi)
             grad = torch.autograd.grad(li.sum(), xi, create_graph=True)[0]
-            gp = grad.pow(2).sum(-1).mean()
+            wgp = neg[:nn_]
+            gp = (grad.pow(2).sum(-1) * wgp).sum() / wgp.sum().clamp_min(1.0)
             self._step(self.opt_d, bce + cfg.gp_coef * gp)
-            m.update({"d_loss": bce.item(), "d_gp": gp.item(),
-                      "d_acc_pos": (lp > 0).float().mean().item(), "d_acc_neg": (ln_ < 0).float().mean().item()})
+            m.update({"d_loss": bce.detach(), "d_gp": gp.detach(),
+                      "d_acc_pos": (lp > 0).float().mean().detach(),
+                      "d_acc_neg": (((ln_ < 0).float() * neg).sum() / nsum).detach()})
             with torch.no_grad():
                 _, lr_ = self.D(ng, z)
                 r_d = lr_.clamp(-cfg.disc_reward_clip, cfg.disc_reward_clip)
         elif have_demo:   # no policy negatives in this batch: skip the D step, still use D's reward
-            m.update({"d_loss": 0.0, "d_gp": 0.0, "d_acc_pos": 0.0, "d_acc_neg": 0.0})
+            m.update({"d_loss": zero, "d_gp": zero, "d_acc_pos": zero, "d_acc_neg": zero})
             with torch.no_grad():
                 _, lr_ = self.D(ng, z)
                 r_d = lr_.clamp(-cfg.disc_reward_clip, cfg.disc_reward_clip)
         else:
-            m.update({"d_loss": 0.0, "d_gp": 0.0, "d_acc_pos": 0.0, "d_acc_neg": 0.0})
+            m.update({"d_loss": zero, "d_gp": zero, "d_acc_pos": zero, "d_acc_neg": zero})
             r_d = torch.zeros(b, device=g.device)
 
         # ---- style critic Q_D and penalty critic Q_R (TD)
@@ -240,9 +303,9 @@ class FBCPR(nn.Module):
             nb = cfg.gamma * (1.0 - done)
             y_d = r_d + nb * self.QD_t(nobs, z, a_next)
             y_r = r_r + nb * self.QR_t(nobs, z, a_next)
-        l_qd = F.mse_loss(self.QD(obs, z, batch["action"]), y_d)
+        l_qd = F.mse_loss(self.QD(obs, z, inp["action"]), y_d)
         self._step(self.opt_qd, l_qd)
-        l_qr = F.mse_loss(self.QR(obs, z, batch["action"]), y_r)
+        l_qr = F.mse_loss(self.QR(obs, z, inp["action"]), y_r)
         self._step(self.opt_qr, l_qr)
 
         # ---- actor
@@ -264,8 +327,95 @@ class FBCPR(nn.Module):
         polyak(self.B_t, self.B, cfg.tau)
         polyak(self.QD_t, self.QD, cfg.tau)
         polyak(self.QR_t, self.QR, cfg.tau)
-        self.num_updates += 1
-        m.update({"qd_loss": l_qd.item(), "qr_loss": l_qr.item(), "actor_loss": l_pi.item(),
-                  "q_fb": q_fb.mean().item(), "q_d": q_d.mean().item(), "q_r": q_r.mean().item(),
-                  "r_d": r_d.mean().item(), "r_r": r_r.mean().item()})
+        m.update({"qd_loss": l_qd.detach(), "qr_loss": l_qr.detach(), "actor_loss": l_pi.detach(),
+                  "q_fb": q_fb.mean().detach(), "q_d": q_d.mean().detach(), "q_r": q_r.mean().detach(),
+                  "r_d": r_d.mean().detach(), "r_r": r_r.mean().detach()})
         return m
+
+    # -------------------------------------------------- CUDA graph
+    GRAPH_WARMUP = 3
+
+    def _graph_supported(self, step_d: bool) -> bool:
+        return bool(getattr(self.cfg, "cuda_graph", False)) and self.method == "fb" and step_d \
+            and self.device.type == "cuda"
+
+    def _make_capturable(self) -> None:
+        """Adam must keep its step counters on the GPU to be captured."""
+        for opt in (self.opt_fb, self.opt_actor, self.opt_qd, self.opt_qr, self.opt_d):
+            for grp in opt.param_groups:
+                grp["capturable"] = True
+            for st in opt.state.values():
+                if "step" in st and torch.is_tensor(st["step"]) and st["step"].device.type != "cuda":
+                    st["step"] = st["step"].to(self.device, dtype=torch.float32)
+
+    def _graph_update(self, inp) -> Dict[str, torch.Tensor]:
+        g = getattr(self, "_graph", None)
+        if g is None:
+            self._make_capturable()
+            self._static = _clone_tree(inp)
+            side = torch.cuda.Stream()
+            side.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(side):                 # warm up allocator / autograd on a side stream
+                for _ in range(self.GRAPH_WARMUP):
+                    _copy_tree(self._static, inp)
+                    self._core(self._static, True, True)
+            torch.cuda.current_stream().wait_stream(side)
+            for opt in (self.opt_fb, self.opt_actor, self.opt_qd, self.opt_qr, self.opt_d):
+                opt.zero_grad(set_to_none=True)
+            g = torch.cuda.CUDAGraph()
+            _copy_tree(self._static, inp)
+            with torch.cuda.graph(g):
+                self._static_out = self._core(self._static, True, True)
+            self._graph = g
+            self.num_updates += self.GRAPH_WARMUP          # the warm-up iterations were real updates
+        _copy_tree(self._static, inp)
+        g.replay()
+        return self._static_out
+
+    def _apply_lr(self) -> None:
+        """Learning rates = config rates x lr_scale, ramped linearly from 1x over lr_warmup updates
+        counted from the first update of this process (so a resumed run ramps again)."""
+        cfg = self.cfg
+        scale = float(getattr(cfg, "lr_scale", 1.0))
+        warm = int(getattr(cfg, "lr_warmup", 0))
+        if scale == 1.0 and not hasattr(self, "_lr_t0"):
+            return
+        if not hasattr(self, "_lr_t0"):
+            self._lr_t0 = self.num_updates
+        f = 1.0 if warm <= 0 else min(1.0, (self.num_updates - self._lr_t0 + 1) / warm)
+        mult = 1.0 + (scale - 1.0) * f
+        base = {id(self.opt_actor): [cfg.lr_actor], id(self.opt_qd): [cfg.lr_critic], id(self.opt_qr): [cfg.lr_critic],
+                id(self.opt_d): [cfg.lr_disc], id(self.opt_fb): [cfg.lr_f, cfg.lr_b]}
+        for opt in (self.opt_fb, self.opt_actor, self.opt_qd, self.opt_qr, self.opt_d):
+            for grp, lr0 in zip(opt.param_groups, base[id(opt)]):
+                grp["lr"] = lr0 * mult
+        self._lr_mult = mult
+
+    def update(self, batch: Dict[str, object], demo=None) -> Dict[str, float]:
+        """One FB-CPR gradient step on a replay batch; demo is a DemoStore or None."""
+        self._apply_lr()
+        inp, have_demo, step_d = self._prepare(batch, demo)
+        warming = getattr(self, "_lr_mult", float(getattr(self.cfg, "lr_scale", 1.0))) != float(
+            getattr(self.cfg, "lr_scale", 1.0))
+        if self._graph_supported(step_d) and not warming:   # graphs bake the learning rate in: capture after warm-up
+            m = self._graph_update(inp)
+        else:
+            m = self._core(inp, have_demo, step_d)
+        self.num_updates += 1
+        keys = list(m.keys())
+        vals = torch.stack([m[k].float().reshape(()) for k in keys]).tolist()   # one host sync per update
+        return dict(zip(keys, vals))
+
+
+def _clone_tree(x):
+    if isinstance(x, dict):
+        return {k: _clone_tree(v) for k, v in x.items()}
+    return x.clone() if torch.is_tensor(x) else x
+
+
+def _copy_tree(dst, src) -> None:
+    for k, v in src.items():
+        if isinstance(v, dict):
+            _copy_tree(dst[k], v)
+        elif torch.is_tensor(v):
+            dst[k].copy_(v)

@@ -83,3 +83,10 @@ def test_cli_writes_json(tmp_path, monkeypatch):
 def test_warns_when_the_mission_compiler_is_missing():
     assert E.check_api(E.offline_api()) is None
     assert "keyword parser" in E.check_api({})
+
+
+def test_worlds_done_at_the_start_are_not_successes(monkeypatch):
+    monkeypatch.setattr(E, "_done_now", lambda m, g, latched: True)     # every world "done" from the start
+    r = E.run_mission("trash", "fly to the bin", ZeroAgent(), envs=2, max_steps=3, make_env=mk,
+                      z_samples_envs=2, z_samples_steps=2)
+    assert r.trivial == 1.0 and r.success == 0.0
