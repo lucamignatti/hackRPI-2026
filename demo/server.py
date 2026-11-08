@@ -23,6 +23,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from fastapi import Body, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -593,6 +598,19 @@ def create_app(session: Optional[DemoSession] = None, speed: float = 1.0, max_fp
     @app.post("/api/scene")
     async def scene(body: Dict[str, Any] = Body(...)):
         return await run(S().set_scene, str(body.get("scene", "")))
+
+    @app.post("/api/key")
+    async def post_api_key(body: Dict[str, Any] = Body(...)):
+        key = str(body.get("key", "")).strip()
+        if not key:
+            raise HTTPException(400, "empty key")
+        env_file = Path(__file__).resolve().parents[1] / ".env"
+        with open(env_file, "w", encoding="utf-8") as f:
+            f.write(f"GEMINI_API_KEY={key}\n")
+        import os
+        os.environ["GEMINI_API_KEY"] = key
+        S().pipeline.mission_api = load_mission_api()
+        return {"status": "ok", "mission_mode": S().pipeline.mission_mode}
 
     @app.post("/api/mission")
     async def mission(body: Dict[str, Any] = Body(...)):

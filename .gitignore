@@ -9,3 +9,6 @@ runs/
 logs/
 *.rrd
 .DS_Store
+
+.env
+.env.*

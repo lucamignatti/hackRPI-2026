@@ -18,7 +18,13 @@ from .. import spec as S
 from .dsl import DSLError, compile_reward, describe_vocabulary
 from .schema import MissionError, MissionSpec, infer_kind, n_agents_from_entities
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
+DEFAULT_MODEL = "gemini-3.5-flash"
 
 # ------------------------------------------------------------------ prompt
 # Each example: (scene, entity excerpt shown to the model, mission text, expected JSON).
