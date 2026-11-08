@@ -1415,11 +1415,13 @@ function hideCard() { $("card").classList.add("hidden"); }
 function showCard(m) {
   $("card").classList.remove("hidden");
   const src = $("card-source");
-  src.textContent = m.source;
+  src.textContent = (m.source === "Gemini" ? "✨ Gemini" : m.source);
   src.className = "tag " + (m.source === "Gemini" ? "gemini" : "fallback");
+  const hasSegs = Array.isArray(m.segments) && m.segments.length > 0;
   const ul = $("card-expl");
   ul.innerHTML = "";
-  for (const line of m.explanation || []) { const li = document.createElement("li"); li.textContent = line; ul.appendChild(li); }
+  const explLines = hasSegs && (m.explanation || []).length > 0 ? [m.explanation[0]] : (m.explanation || []);
+  for (const line of explLines) { const li = document.createElement("li"); li.textContent = line; ul.appendChild(li); }
   const an = $("card-anchors");
   an.innerHTML = "";
   for (const [k, v] of Object.entries(m.anchors || {})) {
@@ -1487,6 +1489,8 @@ function showCard(m) {
         codeLine.className = "stage-item-code";
 
         const rSpan = document.createElement("span");
+        rSpan.className = "r-val";
+        rSpan.title = seg.reward;
         rSpan.textContent = `r: ${seg.reward}`;
         codeLine.appendChild(rSpan);
 

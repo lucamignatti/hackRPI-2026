@@ -34,16 +34,57 @@ textarea { width: 100%; background: var(--bg); color: var(--text); border: 1px s
   padding: 8px; font: inherit; resize: vertical; }
 .examples { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
 .examples span { font-size: 12px; color: var(--accent); background: #0f2033; border-radius: 10px; padding: 2px 8px; cursor: pointer; }
-#card ul { margin: 0 0 8px; padding-left: 18px; }
-#card li { margin: 3px 0; }
-#card-anchors div { font-size: 12.5px; margin: 3px 0; color: var(--muted); }
+#card {
+  background: linear-gradient(180deg, #161e2a 0%, #121721 100%);
+  border: 1px solid #283547;
+  border-radius: 10px;
+  padding: 12px 14px 14px;
+  margin: 12px 0 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+}
+#card h2 {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #94a3b8;
+  margin: 0 0 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+#card ul#card-expl {
+  margin: 0 0 10px;
+  padding: 6px 10px;
+  background: rgba(13, 17, 23, 0.6);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  list-style: none;
+}
+#card ul#card-expl li {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: #cbd5e1;
+  margin: 3px 0;
+  position: relative;
+  padding-left: 12px;
+}
+#card ul#card-expl li::before {
+  content: "›";
+  position: absolute;
+  left: 0;
+  color: var(--accent);
+  font-weight: bold;
+}
+#card-anchors div { font-size: 12px; margin: 3px 0; color: var(--muted); }
 #card-anchors b { color: var(--text); }
-code { display: block; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px;
-  font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: #b9d7ff; }
-details summary { cursor: pointer; color: var(--muted); margin: 4px 0; }
-.done-label { color: var(--muted); font-size: 12px; margin: 4px 0 2px; }
-.tag { text-transform: none; letter-spacing: 0; font-size: 11px; padding: 1px 7px; border-radius: 9px; background: #2a3442; color: var(--text); }
-.tag.gemini { background: #24406b; } .tag.fallback { background: #5b4512; }
+code { display: block; background: #090d13; border: 1px solid #1e293b; border-radius: 6px; padding: 6px 8px;
+  font: 11.5px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; word-break: break-word; color: #93c5fd; }
+details summary { cursor: pointer; color: var(--muted); margin: 6px 0 4px; font-size: 11.5px; }
+.done-label { color: var(--muted); font-size: 11px; margin: 4px 0 2px; }
+.tag { text-transform: none; letter-spacing: 0; font-size: 11px; padding: 2px 8px; border-radius: 12px; background: #2a3442; color: var(--text); font-weight: 600; }
+.tag.gemini { background: linear-gradient(135deg, rgba(56, 139, 253, 0.2), rgba(163, 113, 247, 0.2)); border: 1px solid rgba(88, 166, 255, 0.4); color: #a5d6ff; }
+.tag.fallback { background: #3b2a0c; border: 1px solid #7d5716; color: #f2cc60; }
 .warn { color: var(--warn); font-size: 12px; margin-top: 6px; }
 .note { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .slider { display: block; margin-top: 10px; color: var(--muted); }
@@ -91,54 +132,96 @@ body:not(.has-lake) .lake-only { display: none; }
 #card-agents .sub { color: var(--muted); margin: 2px 0; }
 #card-agents code { margin-top: 3px; }
 
-/* Multi-stage mission segments (compact) */
+/* Multi-stage mission segments */
 #card-segments { margin: 8px 0; }
 .stage-item {
+  position: relative;
   font-size: 12px;
-  padding: 6px 8px;
-  margin: 5px 0;
-  border-radius: 6px;
-  background: var(--panel2);
-  border: 1px solid var(--line);
-  line-height: 1.35;
+  padding: 8px 10px;
+  margin: 6px 0;
+  border-radius: 7px;
+  background: rgba(10, 14, 20, 0.55);
+  border: 1px solid #232f3e;
+  transition: all 0.2s ease;
+}
+.stage-item:hover {
+  border-color: #38495f;
+  background: rgba(10, 14, 20, 0.75);
+}
+.stage-item.active {
+  border-color: #58a6ff;
+  background: rgba(56, 139, 253, 0.08);
+  box-shadow: 0 0 10px rgba(56, 139, 253, 0.25);
 }
 .stage-item-top {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
-  gap: 6px;
-  margin-bottom: 2px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
 }
 .stage-item-num {
   font-weight: 700;
-  color: var(--accent);
-  font-size: 11px;
+  color: #58a6ff;
+  font-size: 10px;
   text-transform: uppercase;
+  background: rgba(56, 139, 253, 0.12);
+  border: 1px solid rgba(56, 139, 253, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 .stage-item-text {
   font-weight: 500;
-  color: var(--text);
+  color: #e2e8f0;
+  font-size: 12px;
   flex: 1;
-}
-.stage-item-coords {
-  color: var(--muted);
-  font-family: ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  line-height: 1.3;
 }
 .stage-item-code {
-  font-family: ui-monospace, Menlo, monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
-  color: #8bb2db;
+  color: #93c5fd;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
-  background: var(--bg);
-  padding: 3px 6px;
-  border-radius: 4px;
-  margin-top: 3px;
+  justify-content: space-between;
+  gap: 6px;
+  background: #090d13;
+  padding: 4px 8px;
+  border-radius: 5px;
+  border: 1px solid #1a222e;
+}
+.stage-item-code .r-val {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 175px;
 }
 .stage-item-code span.done {
-  color: #7ee787;
-  margin-left: auto;
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.1);
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+button.go {
+  background: linear-gradient(180deg, #2ea043 0%, #238636 100%);
+  border: 1px solid #3fb950;
+  color: #ffffff;
+  font-weight: 600;
+  box-shadow: 0 2px 6px rgba(35, 134, 54, 0.35);
+  transition: filter 0.15s, transform 0.1s;
+}
+button.go:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+button.go:active {
+  transform: translateY(0);
 }
