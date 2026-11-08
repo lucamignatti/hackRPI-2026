@@ -125,15 +125,22 @@ window.addEventListener("resize", resize);
 // ------------------------------------------------------------------ static world (rebuilt when the arena size changes)
 const world = new THREE.Group();
 scene.add(world);
-let flatGround = null, border = null, oceanGroup = null, waterGeo = null, lake = null, sea = null;
+let flatGround = null, border = null, oceanGroup = null, lake = null, sea = null;
 const WATER_SEG = 96;
 const SEA_SEG = 256, MAX_WAVES = 8;
 
-// same formula as waveHeight() below, evaluated per vertex (height + analytic normal)
-function makeSea(h) {
-  const geo = new THREE.PlaneGeometry(2 * h + 10, 2 * h + 10, SEA_SEG, SEA_SEG);
+// GPU water optimization: keep wave deformation and lighting normals off the CPU.
+// Same formula as waveHeight(), evaluated per vertex with an analytic normal.  Both the
+// ocean and the world's sea use this GPU path; the ocean simply uses the smaller grid.
+function makeSea(h, segments = SEA_SEG, appearance = {}) {
+  const geo = new THREE.PlaneGeometry(2 * h + 10, 2 * h + 10, segments, segments);
   const mat = new THREE.MeshStandardMaterial({
-    color: 0x1f5f8b, roughness: 0.3, metalness: 0.1, transparent: true, opacity: 0.62, depthWrite: false,
+    color: appearance.color ?? 0x1f5f8b,
+    roughness: appearance.roughness ?? 0.3,
+    metalness: appearance.metalness ?? 0.1,
+    transparent: true,
+    opacity: appearance.opacity ?? 0.62,
+    depthWrite: false,
   });
   const u = {
     uN: { value: 0 }, uT: { value: 0 }, uLevel: { value: 0 },
@@ -170,8 +177,8 @@ vec3 objectTangent = vec3(tangent.xyz);
   return m;
 }
 // water: {level, waves} with both set (world); t: sim time
-function updateSea(water, t) {
-  const u = sea.userData.u, w = water.waves, n = Math.min(w.amp.length, MAX_WAVES);
+function updateSea(surface, water, t) {
+  const u = surface.userData.u, w = water.waves, n = Math.min(w.amp.length, MAX_WAVES);
   u.uN.value = n; u.uT.value = t; u.uLevel.value = water.level || 0;
   for (let i = 0; i < n; i++) {
     u.uAmp.value[i] = w.amp[i]; u.uK.value[i] = w.k[i]; u.uDir.value[i] = w.dir[i];
@@ -201,13 +208,11 @@ function buildArena(h) {
     new THREE.LineBasicMaterial({ color: 0x5b6b60 }));
   border.position.z = 0.02;
   world.add(border);
-  // ocean: animated surface + dim seabed
+  // Ocean: the same lit analytic wave shader as the world sea, on a smaller grid.  This
+  // replaces the old per-frame JS vertex rewrite and normal recomputation.
   oceanGroup = new THREE.Group();
-  waterGeo = new THREE.PlaneGeometry(2 * h + 10, 2 * h + 10, WATER_SEG, WATER_SEG);
-  const water = new THREE.Mesh(waterGeo, new THREE.MeshStandardMaterial({
-    color: 0x1f5f8b, roughness: 0.35, metalness: 0.1, transparent: true, opacity: 0.55, side: THREE.DoubleSide, depthWrite: false,
-  }));
-  water.renderOrder = 2;
+  const water = makeSea(h, WATER_SEG, { color: 0x216b99, roughness: 0.32, metalness: 0.12, opacity: 0.58 });
+  water.visible = true;
   oceanGroup.add(water);
   const bed = new THREE.Mesh(new THREE.PlaneGeometry(2 * h + 10, 2 * h + 10), new THREE.MeshStandardMaterial({ color: 0x0c2233, roughness: 1 }));
   bed.position.z = -8;
@@ -216,7 +221,7 @@ function buildArena(h) {
   oceanGroup.visible = false;
   world.add(oceanGroup);
   // world: sea + lakes at the tide level with waves on top, over the whole arena (the terrain
-  // hides it on land). Displaced on the GPU, so a fine grid costs nothing per frame.
+  // hides it on land). Displaced on the GPU, avoiding per-frame CPU buffer rebuilds.
   if (sea) { world.remove(sea); sea.geometry.dispose(); }
   sea = makeSea(h);
   world.add(sea);
@@ -230,13 +235,6 @@ function buildArena(h) {
   frameCamera();
 }
 buildArena(25);
-
-function updateWater(w, t) {
-  const pos = waterGeo.attributes.position;
-  for (let i = 0; i < pos.count; i++) pos.setZ(i, waveHeight(w, pos.getX(i), pos.getY(i), t));
-  pos.needsUpdate = true;
-  waterGeo.computeVertexNormals();
-}
 
 // ------------------------------------------------------------------ terrain heightfield
 // heights[i][j] at x = -half + 2*half*j/(res-1), y = -half + 2*half*i/(res-1)
@@ -727,7 +725,7 @@ function buildingPart(geometry, hasFacade = false) {
   return geometry;
 }
 
-// Two shared city silhouettes. Each building is one mesh / draw call and owns no texture.
+// Two shared city silhouettes. Instancing later keeps the whole city to two facade draw calls.
 const apartmentBuildingGeometry = mergeGeometries([
   buildingPart(placedGeometry(new THREE.BoxGeometry(0.98, 0.98, 0.86), [0, 0, -0.07]), true),
   buildingPart(placedGeometry(new THREE.BoxGeometry(0.78, 0.78, 0.14), [0, 0, 0.43])),
@@ -844,6 +842,53 @@ function makeBuildingMaterial(color, style) {
 const apartmentBuildingMaterial = makeBuildingMaterial(0x9b5845, 0);
 const officeBuildingMaterial = makeBuildingMaterial(0x376f91, 1);
 
+// Building optimization: preserve both detailed silhouettes and facade shaders while batching.
+// Buildings are static repeats of two shared silhouettes.  Keep the full facade shader and
+// rooftop detail, but submit every apartment in one call and every office in another.
+const MAX_BUILDINGS = 64;
+const buildingBatches = {
+  apartment: new THREE.InstancedMesh(apartmentBuildingGeometry, apartmentBuildingMaterial, MAX_BUILDINGS),
+  office: new THREE.InstancedMesh(officeBuildingGeometry, officeBuildingMaterial, MAX_BUILDINGS),
+};
+const buildingDummy = new THREE.Object3D();
+let buildingLayoutKey = "";
+for (const batch of Object.values(buildingBatches)) {
+  batch.count = 0;
+  batch.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  dyn.add(batch);
+}
+
+function buildingVariant(it) {
+  const numbers = it.name.match(/\d+/g);
+  const ordinal = numbers ? Number(numbers[numbers.length - 1]) : hash(it.name);
+  const office = ordinal % 2 === 1;
+  return office ? "office" : "apartment";
+}
+
+function syncBuildings(items) {
+  let key = "";
+  for (const it of items || []) if (it.kind === "building") key += `${it.name}:${it.pos}:${it.size}|`;
+  if (key === buildingLayoutKey) return;
+  buildingLayoutKey = key;
+  const count = { apartment: 0, office: 0 };
+  for (const it of items || []) {
+    if (it.kind !== "building") continue;
+    const variant = buildingVariant(it);
+    const i = count[variant]++;
+    if (i >= MAX_BUILDINGS) continue;
+    buildingDummy.position.set(...it.pos);
+    buildingDummy.rotation.set(0, 0, 0);
+    buildingDummy.scale.set(...it.size);
+    buildingDummy.updateMatrix();
+    buildingBatches[variant].setMatrixAt(i, buildingDummy.matrix);
+  }
+  for (const [variant, batch] of Object.entries(buildingBatches)) {
+    batch.count = Math.min(count[variant], MAX_BUILDINGS);
+    batch.instanceMatrix.needsUpdate = true;
+    batch.computeBoundingSphere();
+  }
+}
+
 function createBox(it) {
   const g = new THREE.Group();
   const body = new THREE.Group();
@@ -852,14 +897,7 @@ function createBox(it) {
     const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); body.add(m); return m;
   };
   const k = it.kind;
-  if (k === "building") {
-    const numbers = it.name.match(/\d+/g);
-    const ordinal = numbers ? Number(numbers[numbers.length - 1]) : hash(it.name);
-    const office = ordinal % 2 === 1;
-    add(office ? officeBuildingGeometry : apartmentBuildingGeometry,
-      office ? officeBuildingMaterial : apartmentBuildingMaterial);
-    g.userData.buildingType = office ? "office" : "apartment";
-  } else if (k === "car") {
+  if (k === "car") {
     const col = CAR_COLORS[hash(it.name) % CAR_COLORS.length];
     add(unitBox, std(col, { metalness: 0.4, roughness: 0.4 }), 0, 0, -0.15, 1, 1, 0.6);
     add(unitBox, std(0x1d2733, { metalness: 0.3, roughness: 0.2 }), 0, 0, 0.3, 0.85, 0.55, 0.4);   // cabin (long axis fixed below)
@@ -1073,6 +1111,7 @@ function updateAnimal(g, it) {
 // ------------------------------------------------------------------ frame handling
 let latest = null, latestAt = 0, curScene = null;
 let boatShown = false;
+const ordinaryBoxes = [];
 const $ = (id) => document.getElementById(id);
 
 function applyFrame(st) {
@@ -1093,7 +1132,7 @@ function applyFrame(st) {
   const showTerrain = !!ter && !!terrainMesh && (ter.key === undefined || ter.key === terrainKey);
   if (terrainMesh) terrainMesh.visible = showTerrain;
   const waves = !!(water && water.waves);
-  // world: terrain + tide level + waves -> the GPU sea at the tide level; ocean: no terrain, CPU waves
+  // World: terrain + tide level + waves; ocean: the smaller GPU wave surface without terrain.
   const seaOn = waves && !!ter;
   const ocean = waves && !seaOn;
   oceanGroup.visible = ocean;
@@ -1133,7 +1172,10 @@ function applyFrame(st) {
   if (arenaChanged && drones[0]) { arenaChanged = false; setFollow(ARENA_HALF > 60, true); }
   boatShown = !!st.boat;
   syncPool(pools.items, st.items, (it) => it.type + ":" + it.shape + ":" + it.is_trash, createItem, updateItem);
-  syncPool(pools.boxes, st.boxes, (it) => it.kind, createBox, updateBox);
+  syncBuildings(st.boxes);
+  ordinaryBoxes.length = 0;
+  for (const box of st.boxes || []) if (box.kind !== "building") ordinaryBoxes.push(box);
+  syncPool(pools.boxes, ordinaryBoxes, (it) => it.kind, createBox, updateBox);
   syncPool(pools.spheres, st.spheres, (it) => it.kind, createSphere, updateSphere);
   syncPool(pools.zones, st.zones, (it) => it.kind, createZone, updateZone);
   syncPool(pools.animals, st.animals, (it) => it.type, createAnimal, updateAnimal);
@@ -1575,8 +1617,8 @@ function animate() {
   if (waves) {
     const t = latest.t + Math.min((performance.now() - latestAt) / 1000, 0.15);
     const level = latest.water.level || 0;           // wave surface offset by the tide level (world)
-    if (sea.visible) updateSea(latest.water, t);
-    else updateWater(waves, t);
+    if (sea.visible) updateSea(sea, latest.water, t);
+    else updateSea(oceanGroup.userData.water, latest.water, t);
     if (boat.visible && boat.userData.base) {
       const b = boat.userData.base;
       boat.position.set(b[0], b[1], level + waveHeight(waves, b[0], b[1], t) + 0.1);
@@ -1586,7 +1628,7 @@ function animate() {
   renderer.render(scene, camera);
 }
 window.__skyhand = { camera, controls, renderer, scene, pools, drones, followDrone, setFollow,
-  get sea() { return sea; }, get follow() { return { on: follow, idx: followIdx }; } };   // console debugging
+  buildingBatches, get sea() { return sea; }, get follow() { return { on: follow, idx: followIdx }; } };   // console debugging
 resize();
 renderExamples("trash");
 connect();

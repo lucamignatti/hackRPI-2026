@@ -415,6 +415,17 @@ def test_lidar_sees_the_world(scene):
     assert (obs["lidar"][:, :, 0] < 255).any() and (obs["lidar_down"][:, :, 0] < 255).any()
 
 
+def test_world_lidar_staggers_one_agent_per_tick():
+    env = make_env("world", 1, lidar=False, seed=3)
+    env.reset()
+    calls = []
+    env._scan = lambda ids, agent_ids=None: calls.append((ids.tolist(), tuple(agent_ids)))
+    env.cfg.lidar = True
+    for _ in range(env.num_agents):
+        env.step(zeros(env))
+    assert calls == [([0], (2,)), ([0], (1,)), ([0], (0,))]
+
+
 # ---------------------------------------------------------------- expert (slow)
 def _expert_success(scene, seed, **kw):
     env = make_env(scene, 16, seed=seed, lidar=False, **kw)

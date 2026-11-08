@@ -36,8 +36,18 @@ class Terrain:
         self.tide_phase = torch.zeros(n, device=device)
         self.tide_offset = torch.zeros(n, device=device)     # demo slider
         self.version = torch.zeros(n, dtype=torch.long, device=device)
+        self._ray_hmax = torch.zeros(n, device=device)
+        self._ray_lip = torch.full((n,), 0.05, device=device)
         lin = torch.linspace(-half, half, res, device=device)
         self.gy, self.gx = torch.meshgrid(lin, lin, indexing="ij")   # [res, res]: row = y, col = x
+
+    def _refresh_ray_bounds(self, ids: torch.Tensor) -> None:
+        """Cache LiDAR ray-march bounds whenever terrain changes, not once per scan."""
+        h = self.h[ids]
+        self._ray_hmax[ids] = h.flatten(1).amax(1)
+        gy = (h[:, 1:, :] - h[:, :-1, :]).abs().flatten(1).amax(1)
+        gx = (h[:, :, 1:] - h[:, :, :-1]).abs().flatten(1).amax(1)
+        self._ray_lip[ids] = 1.5 * torch.maximum(gx, gy) / (2 * self.half / (self.res - 1)) + 0.05
 
     # ------------------------------------------------------------ generation
     def set_flat(self, ids: torch.Tensor, z: float = 0.0, water: Optional[float] = None) -> None:
@@ -48,6 +58,7 @@ class Terrain:
         self.tide_amp[ids] = 0.0
         self.tide_offset[ids] = 0.0
         self.version[ids] += 1
+        self._refresh_ray_bounds(ids)
 
     def set_heights(self, ids: torch.Tensor, h: torch.Tensor, water: float, tide_amp: float,
                     gen: Optional[torch.Generator] = None) -> None:
@@ -60,6 +71,7 @@ class Terrain:
         self.tide_phase[ids] = torch.rand(m, generator=gen).to(self.h.device) * 2 * math.pi
         self.tide_offset[ids] = 0.0
         self.version[ids] += 1
+        self._refresh_ray_bounds(ids)
 
     def generate(self, ids: torch.Tensor, style: str, gen: Optional[torch.Generator] = None) -> None:
         m = len(ids)
@@ -125,6 +137,7 @@ class Terrain:
         self.tide_phase[ids] = r(m) * 2 * math.pi
         self.tide_offset[ids] = 0.0
         self.version[ids] += 1
+        self._refresh_ray_bounds(ids)
 
     # ------------------------------------------------------------ queries
     def _rows(self, ids):
@@ -172,7 +185,7 @@ class Terrain:
                 + g(i0 + 1, j0) * (1 - fu) * fv + g(i0 + 1, j0 + 1) * fu * fv)
 
     def ray_hit(self, o: torch.Tensor, d: torch.Tensor, max_range: float, ids: Optional[torch.Tensor] = None,
-                min_step: float = 0.15, max_iters: int = 64, refine: int = 6) -> torch.Tensor:
+                min_step: float = 0.2, max_iters: int = 48, refine: int = 4) -> torch.Tensor:
         """Distance along rays o, d [n, R, 3] to the terrain (inf if none within max_range).
 
         Flat worlds use an exact plane intersection. Others use Lipschitz-bounded marching:
@@ -191,10 +204,8 @@ class Terrain:
         sel = torch.nonzero(~flat).squeeze(-1)
         sub_ids = sel if ids is None else ids[sel]
         hf = self.h[sub_ids].reshape(len(sel), -1)
-        hmax = hf.amax(1)
-        gy = (self.h[sub_ids][:, 1:, :] - self.h[sub_ids][:, :-1, :]).abs().flatten(1).amax(1)
-        gx = (self.h[sub_ids][:, :, 1:] - self.h[sub_ids][:, :, :-1]).abs().flatten(1).amax(1)
-        lip = 1.5 * torch.maximum(gx, gy) / (2 * self.half / (self.res - 1)) + 0.05   # slope bound
+        hmax = self._ray_hmax[sub_ids]
+        lip = self._ray_lip[sub_ids]
         os, ds = o[sel], d[sel]
         m, R = os.shape[:2]
         O, D = os.reshape(-1, 3), ds.reshape(-1, 3)
@@ -243,6 +254,7 @@ class Terrain:
         for k, v in st.items():
             getattr(self, k)[env_ids] = v[src]
         self.version[env_ids] += 1
+        self._refresh_ray_bounds(env_ids)
 
 
 class LakeWater:

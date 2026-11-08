@@ -116,12 +116,13 @@ The top bar always shows which mode is running, so the demo never misrepresents 
 - `fake_env.py`: kinematic stand-in env with the spec's API and render-state schema (`--fake-env`, tests).
 - `web/index.html`, `web/main.js`, `web/style.css`: the viewer. three.js 0.186.1 (r186) from jsDelivr via an importmap.
   City buildings alternate shared apartment and office silhouettes with procedural PBR facades; each
-  building remains a single mesh and owns no facade texture.
+  silhouette is rendered as one instanced batch, so a full city uses two facade draw calls and no facade textures.
   The terrain heightfield becomes a mesh coloured by height (sand at the water line, grass, rock, snow on
   peaks; asphalt in a city), rebuilt only when the terrain changes (the world's 128 x 128 grid is built once
   per terrain version). Lakes are a flat plane at `water.level`, the ocean is the animated wave surface, and
   the world's sea is the wave surface offset by `water.level`, a 256 x 256 grid over the whole arena displaced
-  on the GPU (the terrain hides it on land).
+  on the GPU (the terrain hides it on land). Ocean waves use the same analytic-normal GPU shader on a smaller
+  96 x 96 grid, with no per-frame JavaScript vertex or normal rebuild.
 
 API: `GET /` · `GET /api/health` · `GET /api/state` (one frame, terrain heights included) · `GET /api/info` ·
 `GET /api/terrain` (current heightfield) · `GET /api/zmap` ·
@@ -142,7 +143,8 @@ skip a scene whose `make_env` fails or builds a world outside the arena.
   server runs with `--host 0.0.0.0`, and the firewall on port 8000. `curl http://<ip>:8000/api/health` should answer.
 - **Black 3D view, panel fine**: three.js loads from `cdn.jsdelivr.net`. With no internet at the table, the page
   cannot draw the scene. Use a phone hotspot, or fall back to the recorded videos / the Genesis viewer.
-- **Choppy motion**: start with `--no-lidar`, or check the server log for slow ticks (Genesis on CPU is slow; use `--device cuda`).
+- **Choppy motion**: terrain LiDAR uses a bounded ray marcher. Multi-drone scans are staggered to avoid one large
+  tick; `--no-lidar` remains the fastest diagnostic. Genesis on CPU is slow; use `--device cuda` when available.
 - **Checkpoint did not load**: the log says why and the top bar shows `scripted fallback`. Check the path and that
   `skyhand.train` imports.
 - **Compiler shows `offline parser` although you set a key**: the note under the card gives Gemini's error.

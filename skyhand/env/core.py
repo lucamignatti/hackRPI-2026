@@ -837,9 +837,20 @@ class SkyEnv:
         self.acc_prev, self.vel_prev = acc, self.vel.clone()
         self.last_action = actions
         if self.cfg.lidar:
-            due = (self.steps % spec.LIDAR_EVERY) == 0
-            if due.any():
-                self._scan(torch.nonzero(due).squeeze(-1))
+            # LiDAR scheduling optimization: spread complete scans across policy ticks.
+            # Keep the normal 10 Hz sensor rate, but split multi-drone scans across policy
+            # ticks instead of making one tick cast every ray for every drone.  The combined
+            # world uses a slightly wider three-tick cycle: one fresh scan per tick keeps its
+            # expensive terrain ray marcher inside the 20 Hz demo budget while every drone
+            # still receives a complete 6.7 Hz scan.  reset() always primes every sensor.
+            interval = self.num_agents if self.scene == "world" else spec.LIDAR_EVERY
+            for phase in range(interval):
+                agents = range(phase, self.num_agents, interval)
+                if phase >= self.num_agents:
+                    continue
+                due = ((self.steps + phase) % interval) == 0
+                if due.any():
+                    self._scan(torch.nonzero(due).squeeze(-1), agents)
         events["collision"] = self.collided
         events["shield"] = self.shield_hit
         if self.has_items:
@@ -1174,16 +1185,17 @@ class SkyEnv:
         return {"box_c": torch.cat(box_c, 1), "box_h": torch.cat(box_h, 1), "box_active": torch.cat(box_a, 1),
                 "sph_c": torch.cat(sph_c, 1), "sph_r": torch.cat(sph_r, 1), "sph_active": torch.cat(sph_a, 1)}
 
-    def _scan(self, env_ids: torch.Tensor) -> None:
+    def _scan(self, env_ids: torch.Tensor, agent_ids=None) -> None:
         if len(env_ids) == 0:
             return
+        agents = range(self.num_agents) if agent_ids is None else tuple(int(a) for a in agent_ids)
         geom = {k: v[env_ids] for k, v in self._geometry().items()}
         ids = env_ids
         geom["terrain"] = lambda o, d: self.terrain.ray_hit(o, d, spec.LIDAR_MAX_RANGE, ids)
         water = None if bool((self.terrain.water_base[ids] <= NO_WATER / 2).all()) else SurfaceWater(self, ids)
         ext, ext_d = self._solid_ranges()
-        imgs, downs, pts = [], [], None
-        for ag in range(self.num_agents):
+        pts = None
+        for ag in agents:
             g = dict(geom)
             if self._drone_spheres_first:
                 sc = g["sph_c"].clone()
@@ -1194,16 +1206,15 @@ class SkyEnv:
                 turbidity=self.turbidity[ids],
                 solid_range=None if ext is None else ext[ids, ag:ag + 1].reshape(len(ids), 1, -1),
                 solid_range_down=None if ext_d is None else ext_d[ids, ag:ag + 1].reshape(len(ids), 1, -1))
-            imgs.append(img)
-            downs.append(down)
+            self._lidar[ids, ag:ag + 1] = img
+            self._lidar_down[ids, ag:ag + 1] = down
             if ag == 0:
                 pts = p
-        self._lidar[ids] = torch.cat(imgs, 1)
-        self._lidar_down[ids] = torch.cat(downs, 1)
-        for k, v in pts.items():
-            if k not in self._lidar_pts:
-                self._lidar_pts[k] = torch.full((self.num_envs,) + v.shape[1:], float("nan"), device=self.device)
-            self._lidar_pts[k][ids] = v
+        if pts is not None:
+            for k, v in pts.items():
+                if k not in self._lidar_pts:
+                    self._lidar_pts[k] = torch.full((self.num_envs,) + v.shape[1:], float("nan"), device=self.device)
+                self._lidar_pts[k][ids] = v
 
     # ================================================================ observations
     def observe(self) -> Dict[str, torch.Tensor]:

@@ -645,6 +645,15 @@ def test_mainjs_world_viewer():
     assert "three@0.186.1" in html
 
 
+def test_mainjs_ocean_waves_stay_on_gpu():
+    """Ocean and world waves share the analytic-normal shader; JS never rebuilds water vertices."""
+    js = (WEB / "main.js").read_text()
+    assert "makeSea(h, WATER_SEG" in js
+    assert "updateSea(oceanGroup.userData.water" in js
+    assert "function updateWater" not in js
+    assert "waterGeo.computeVertexNormals" not in js
+
+
 def test_mainjs_r186_drone_model_and_shader():
     """The r186 viewer keeps drone detail shared, shader-local, and allocation-light."""
     js = (WEB / "main.js").read_text()
@@ -658,7 +667,7 @@ def test_mainjs_r186_drone_model_and_shader():
 
 
 def test_mainjs_building_variants_share_geometry_and_shader():
-    """Apartments and offices are deterministic one-mesh variants with a shared facade program."""
+    """Apartments and offices preserve their facade programs in two instanced batches."""
     js = (WEB / "main.js").read_text()
     for key in ("apartmentBuildingGeometry", "officeBuildingGeometry", "apartmentBuildingMaterial",
                 "officeBuildingMaterial", '"office" : "apartment"',
@@ -668,6 +677,9 @@ def test_mainjs_building_variants_share_geometry_and_shader():
                 "buildingFloors: { value: office ? 5 : 4 }",
                 "buildingBays: { value: office ? 4 : 3 }"):
         assert key in js, key
+    assert "new THREE.InstancedMesh(apartmentBuildingGeometry" in js
+    assert "new THREE.InstancedMesh(officeBuildingGeometry" in js
+    assert "syncBuildings(st.boxes)" in js
     assert "updateBuildingUniforms" not in js
     assert 'setAttribute("buildingSide"' not in js
     assert "mesh.onBeforeRender" not in js

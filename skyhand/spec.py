@@ -23,7 +23,7 @@ import torch
 PHYS_DT = 0.01            # physics step (s)
 SUBSTEPS = 5              # physics steps per policy step -> 20 Hz policy
 POLICY_DT = PHYS_DT * SUBSTEPS
-LIDAR_EVERY = 2           # policy steps between LiDAR scans -> 10 Hz
+LIDAR_EVERY = 2           # policy steps between scans -> 10 Hz; multi-drone scans are staggered
 EPISODE_STEPS = 900       # 45 s episodes (default; see SCENE_EPISODE_STEPS)
 Z_RESAMPLE_STEPS = 100    # policy steps a world keeps its z during pretraining
 
